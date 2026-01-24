@@ -1,0 +1,13 @@
+[package]
+name = "rustsid"
+version = "0.1.0"
+edition = "2024"
+authors = ["Mikael Lund"]
+license = "MIT"
+description = "A command-line SID music player"
+
+[dependencies]
+resid-rs = "1.1"
+mos6502 = "0.6"
+tinyaudio = "2.0"
+clap = { version = "4", features = ["derive"] }
