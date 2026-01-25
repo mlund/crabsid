@@ -219,6 +219,12 @@ pub enum Popup {
     Help,
     Error(String),
     SaveConfirm,
+    HvscSearch,
+}
+
+enum KeyHandled {
+    Consumed(Option<io::Result<()>>),
+    PassThrough,
 }
 
 /// Browser state for playlist navigation.
@@ -345,6 +351,7 @@ impl<'a> App<'a> {
             self.hvsc_search = Some(String::new());
             self.hvsc_search_results.clear();
             self.hvsc_search_index = 0;
+            self.popup = Popup::HvscSearch;
         }
     }
 
@@ -356,14 +363,12 @@ impl<'a> App<'a> {
     fn hvsc_search_input(&mut self, ch: char) {
         if let Some(ref mut query) = self.hvsc_search {
             query.push(ch);
-            self.update_search_results();
         }
     }
 
     fn hvsc_search_backspace(&mut self) {
         if let Some(ref mut query) = self.hvsc_search {
             query.pop();
-            self.update_search_results();
         }
     }
 
@@ -703,15 +708,17 @@ fn handle_key(app: &mut App, key: KeyCode) -> Option<io::Result<()>> {
         return handle_save_confirm(app, key);
     }
 
-    // Any key dismisses other popups
-    if !matches!(app.popup, Popup::None) {
-        app.close_popup();
-        return None;
+    match handle_popups(app, key) {
+        KeyHandled::Consumed(res) => return res,
+        KeyHandled::PassThrough => {}
     }
 
-    // HVSC search mode
-    if app.hvsc_search.is_some() {
-        return handle_hvsc_search(app, key);
+    // HVSC search results: intercept navigation keys, otherwise continue
+    if app.hvsc_search.is_some()
+        && app.browser_focus == BrowserFocus::Hvsc
+        && handle_hvsc_search_results(app, key)
+    {
+        return None;
     }
 
     match key {
@@ -740,17 +747,45 @@ fn handle_key(app: &mut App, key: KeyCode) -> Option<io::Result<()>> {
     None
 }
 
-fn handle_hvsc_search(app: &mut App, key: KeyCode) -> Option<io::Result<()>> {
+fn handle_hvsc_search_popup(app: &mut App, key: KeyCode) -> Option<io::Result<()>> {
     match key {
-        KeyCode::Esc => app.cancel_hvsc_search(),
-        KeyCode::Enter => app.hvsc_search_select(),
+        KeyCode::Esc => {
+            app.popup = Popup::None;
+            app.cancel_hvsc_search();
+        }
+        KeyCode::Enter => {
+            app.popup = Popup::None;
+            app.update_search_results();
+        }
         KeyCode::Backspace => app.hvsc_search_backspace(),
         KeyCode::Char(ch) => app.hvsc_search_input(ch),
-        KeyCode::Up => app.hvsc_search_prev(),
-        KeyCode::Down => app.hvsc_search_next(),
         _ => {}
     }
     None
+}
+
+fn handle_hvsc_search_results(app: &mut App, key: KeyCode) -> bool {
+    match key {
+        KeyCode::Esc => app.cancel_hvsc_search(),
+        KeyCode::Enter => app.hvsc_search_select(),
+        KeyCode::Up => app.hvsc_search_prev(),
+        KeyCode::Down => app.hvsc_search_next(),
+        KeyCode::Char('/') => app.start_hvsc_search(), // reopen popup to edit query
+        _ => return false,
+    }
+    true
+}
+
+fn handle_popups(app: &mut App, key: KeyCode) -> KeyHandled {
+    match app.popup {
+        Popup::HvscSearch => KeyHandled::Consumed(handle_hvsc_search_popup(app, key)),
+        Popup::SaveConfirm => KeyHandled::Consumed(handle_save_confirm(app, key)),
+        Popup::Help | Popup::Error(_) => {
+            app.close_popup();
+            KeyHandled::Consumed(None)
+        }
+        Popup::None => KeyHandled::PassThrough,
+    }
 }
 
 fn handle_save_confirm(app: &mut App, key: KeyCode) -> Option<io::Result<()>> {
@@ -807,7 +842,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
     draw_vu_meters(frame, vu_area, app);
     draw_voice_scopes(frame, scope_area, app);
     draw_footer(frame, footer_area, app);
-    draw_popup(frame, &app.popup);
+    draw_popup(frame, app);
 }
 
 fn draw_playlist_browser(frame: &mut Frame, area: Rect, app: &mut App) {
@@ -1281,8 +1316,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_popup(frame: &mut Frame, popup: &Popup) {
-    let (title, content, small) = match popup {
+fn draw_popup(frame: &mut Frame, app: &App) {
+    let (title, content, small) = match &app.popup {
         Popup::None => return,
         Popup::Help => (" Help ", help_text(), false),
         Popup::Error(msg) => (" Error ", vec![Line::from(msg.as_str())], false),
@@ -1302,6 +1337,23 @@ fn draw_popup(frame: &mut Frame, popup: &Popup) {
             ],
             true,
         ),
+        Popup::HvscSearch => {
+            let query = app.hvsc_search.as_deref().unwrap_or("");
+            let line = Line::from(vec![
+                Span::styled(" > ", Style::default().fg(Color::Cyan)),
+                Span::raw(query),
+                Span::styled("_", Style::default().fg(Color::Cyan)),
+            ]);
+            (
+                " STIL Search ",
+                vec![
+                    Line::from("  Type search text, Enter to search, Esc to cancel"),
+                    Line::from(""),
+                    line,
+                ],
+                true,
+            )
+        }
     };
 
     let area = if small {
