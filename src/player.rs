@@ -17,6 +17,8 @@ const NTSC_FRAME_CYCLES: u32 = 17045;
 
 /// Ring buffer size for oscilloscope display (~23ms at 44.1kHz)
 const SCOPE_BUFFER_SIZE: usize = 1024;
+/// Envelope sampling divisor (sample envelope every N audio samples)
+const ENVELOPE_SAMPLE_DIVISOR: usize = 4;
 
 pub struct Player {
     cpu: CPU<C64Memory, Nmos6502>,
@@ -29,9 +31,10 @@ pub struct Player {
     cycle_accumulator: f64,
     frame_cycle_count: u32,
     paused: bool,
-    /// Ring buffer of recent samples for oscilloscope visualization
-    scope_buffer: Box<[f32; SCOPE_BUFFER_SIZE]>,
-    scope_write_pos: usize,
+    /// Per-voice envelope history for channel scopes
+    envelope_history: [Box<[f32; SCOPE_BUFFER_SIZE]>; 3],
+    envelope_write_pos: usize,
+    envelope_sample_counter: usize,
 }
 
 impl Player {
@@ -95,8 +98,13 @@ impl Player {
             cycle_accumulator: 0.0,
             frame_cycle_count: 0,
             paused: false,
-            scope_buffer: Box::new([0.0; SCOPE_BUFFER_SIZE]),
-            scope_write_pos: 0,
+            envelope_history: [
+                Box::new([0.0; SCOPE_BUFFER_SIZE]),
+                Box::new([0.0; SCOPE_BUFFER_SIZE]),
+                Box::new([0.0; SCOPE_BUFFER_SIZE]),
+            ],
+            envelope_write_pos: 0,
+            envelope_sample_counter: 0,
         }
     }
 
@@ -121,22 +129,29 @@ impl Player {
                 self.frame_cycle_count += 1;
             }
 
-            let output = self.cpu.memory.sid.output() as f32 / 32768.0;
-            *sample = output;
+            *sample = self.cpu.memory.sid.output() as f32 / 32768.0;
 
-            // Store in ring buffer for oscilloscope
-            self.scope_buffer[self.scope_write_pos] = output;
-            self.scope_write_pos = (self.scope_write_pos + 1) % SCOPE_BUFFER_SIZE;
+            // Store envelope history at reduced rate (envelopes change slower than audio)
+            self.envelope_sample_counter += 1;
+            if self.envelope_sample_counter >= ENVELOPE_SAMPLE_DIVISOR {
+                self.envelope_sample_counter = 0;
+                let state = self.cpu.memory.sid.read_state();
+                for (i, &env) in state.envelope_counter.iter().enumerate() {
+                    self.envelope_history[i][self.envelope_write_pos] = env as f32 / 255.0;
+                }
+                self.envelope_write_pos = (self.envelope_write_pos + 1) % SCOPE_BUFFER_SIZE;
+            }
         }
     }
 
-    /// Returns a snapshot of the oscilloscope buffer, ordered oldest to newest
-    pub fn scope_samples(&self) -> Vec<f32> {
-        let mut samples = Vec::with_capacity(SCOPE_BUFFER_SIZE);
-        // Read from write position (oldest) to end, then from start to write position
-        samples.extend_from_slice(&self.scope_buffer[self.scope_write_pos..]);
-        samples.extend_from_slice(&self.scope_buffer[..self.scope_write_pos]);
-        samples
+    /// Returns envelope history for each voice, ordered oldest to newest
+    pub fn envelope_samples(&self) -> [Vec<f32>; 3] {
+        std::array::from_fn(|i| {
+            let mut samples = Vec::with_capacity(SCOPE_BUFFER_SIZE);
+            samples.extend_from_slice(&self.envelope_history[i][self.envelope_write_pos..]);
+            samples.extend_from_slice(&self.envelope_history[i][..self.envelope_write_pos]);
+            samples
+        })
     }
 
     pub fn toggle_pause(&mut self) {

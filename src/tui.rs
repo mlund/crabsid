@@ -71,29 +71,32 @@ impl VuMeter {
     }
 }
 
-/// Oscilloscope waveform buffer
-pub struct Oscilloscope {
-    samples: Vec<f32>,
+/// Per-voice envelope scope buffers
+pub struct VoiceScopes {
+    samples: [Vec<f32>; 3],
 }
 
-impl Oscilloscope {
+impl VoiceScopes {
     pub fn new() -> Self {
         Self {
-            samples: vec![0.0; SCOPE_DISPLAY_SAMPLES],
+            samples: std::array::from_fn(|_| vec![0.0; SCOPE_DISPLAY_SAMPLES]),
         }
     }
 
-    /// Downsample from player buffer to display resolution
-    pub fn update(&mut self, raw_samples: &[f32]) {
-        if raw_samples.is_empty() {
-            return;
-        }
-        let step = raw_samples.len() / SCOPE_DISPLAY_SAMPLES;
-        if step == 0 {
-            return;
-        }
-        for (i, sample) in self.samples.iter_mut().enumerate() {
-            *sample = raw_samples.get(i * step).copied().unwrap_or(0.0);
+    /// Downsample from player envelope buffers to display resolution
+    pub fn update(&mut self, raw_samples: &[Vec<f32>; 3]) {
+        for (voice, (display, raw)) in self.samples.iter_mut().zip(raw_samples.iter()).enumerate() {
+            if raw.is_empty() {
+                continue;
+            }
+            let step = raw.len() / SCOPE_DISPLAY_SAMPLES;
+            if step == 0 {
+                continue;
+            }
+            for (i, sample) in display.iter_mut().enumerate() {
+                *sample = raw.get(i * step).copied().unwrap_or(0.0);
+            }
+            let _ = voice; // suppress unused warning
         }
     }
 }
@@ -105,7 +108,7 @@ pub struct App<'a> {
     total_songs: u16,
     paused: bool,
     vu_meter: VuMeter,
-    oscilloscope: Oscilloscope,
+    voice_scopes: VoiceScopes,
 }
 
 impl<'a> App<'a> {
@@ -117,14 +120,14 @@ impl<'a> App<'a> {
             total_songs: sid_file.songs,
             paused: false,
             vu_meter: VuMeter::new(),
-            oscilloscope: Oscilloscope::new(),
+            voice_scopes: VoiceScopes::new(),
         }
     }
 
     fn update(&mut self) {
         if let Ok(player) = self.player.lock() {
             self.vu_meter.update(player.voice_levels());
-            self.oscilloscope.update(&player.scope_samples());
+            self.voice_scopes.update(&player.envelope_samples());
             self.paused = player.is_paused();
         }
     }
@@ -210,7 +213,7 @@ fn draw(frame: &mut Frame, app: &App) {
 
     draw_header(frame, header_area, app);
     draw_vu_meters(frame, vu_area, app);
-    draw_oscilloscope(frame, scope_area, app);
+    draw_voice_scopes(frame, scope_area, app);
     draw_footer(frame, footer_area, app);
 }
 
@@ -289,34 +292,49 @@ fn draw_vu_meters(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(chart, inner);
 }
 
-fn draw_oscilloscope(frame: &mut Frame, area: Rect, app: &App) {
+fn draw_voice_scopes(frame: &mut Frame, area: Rect, app: &App) {
+    let voice_names = ["Voice 1", "Voice 2", "Voice 3"];
+    let colors = [Color::Red, Color::Green, Color::Blue];
+
+    // Split into three equal vertical sections
+    let areas = Layout::vertical([
+        Constraint::Ratio(1, 3),
+        Constraint::Ratio(1, 3),
+        Constraint::Ratio(1, 3),
+    ])
+    .areas::<3>(area);
+
+    for (i, (&voice_area, (&name, &color))) in areas
+        .iter()
+        .zip(voice_names.iter().zip(colors.iter()))
+        .enumerate()
+    {
+        draw_single_scope(frame, voice_area, &app.voice_scopes.samples[i], name, color);
+    }
+}
+
+fn draw_single_scope(frame: &mut Frame, area: Rect, samples: &[f32], title: &str, color: Color) {
     let block = Block::default()
-        .title(" Oscilloscope ")
-        .title_style(Style::default().fg(Color::Cyan))
+        .title(format!(" {} ", title))
+        .title_style(Style::default().fg(color))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let samples = &app.oscilloscope.samples;
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
     let width = inner.width as f64;
     let x_scale = width / samples.len() as f64;
 
     let canvas = Canvas::default()
         .marker(Marker::Braille)
         .x_bounds([0.0, width])
-        .y_bounds([-1.0, 1.0])
+        .y_bounds([0.0, 1.0])
         .paint(|ctx| {
-            // Draw center line
-            ctx.draw(&CanvasLine {
-                x1: 0.0,
-                y1: 0.0,
-                x2: width,
-                y2: 0.0,
-                color: Color::DarkGray,
-            });
-
             // Draw waveform as connected line segments
             for i in 0..samples.len().saturating_sub(1) {
                 let x1 = i as f64 * x_scale;
@@ -329,7 +347,7 @@ fn draw_oscilloscope(frame: &mut Frame, area: Rect, app: &App) {
                     y1,
                     x2,
                     y2,
-                    color: Color::Green,
+                    color,
                 });
             }
         });
