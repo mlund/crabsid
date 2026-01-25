@@ -35,6 +35,7 @@ pub struct VuMeter {
 }
 
 impl VuMeter {
+    /// Creates meters with all levels at zero.
     pub fn new() -> Self {
         let now = Instant::now();
         Self {
@@ -78,6 +79,7 @@ pub struct VoiceScopes {
 }
 
 impl VoiceScopes {
+    /// Creates scope buffers initialized to zero.
     pub fn new() -> Self {
         Self {
             samples: std::array::from_fn(|_| vec![0.0; SCOPE_DISPLAY_SAMPLES]),
@@ -101,6 +103,7 @@ impl VoiceScopes {
     }
 }
 
+/// TUI application state holding the player and display data.
 pub struct App<'a> {
     player: SharedPlayer,
     sid_file: &'a SidFile,
@@ -113,6 +116,7 @@ pub struct App<'a> {
 }
 
 impl<'a> App<'a> {
+    /// Creates the application with the given player and initial song.
     pub fn new(player: SharedPlayer, sid_file: &'a SidFile, song: u16) -> Self {
         let chip_model = player
             .lock()
@@ -172,6 +176,7 @@ impl<'a> App<'a> {
     }
 }
 
+/// Runs the TUI in the alternate screen until the user quits.
 pub fn run(player: SharedPlayer, sid_file: &SidFile, song: u16) -> io::Result<()> {
     stdout().execute(EnterAlternateScreen)?;
     enable_raw_mode()?;

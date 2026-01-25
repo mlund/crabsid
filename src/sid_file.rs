@@ -20,28 +20,47 @@ const OFFSET_AUTHOR: usize = 0x36;
 const OFFSET_RELEASED: usize = 0x56;
 const OFFSET_FLAGS: usize = 0x76;
 
+/// Parsed PSID/RSID file containing a C64 SID tune.
+///
+/// The PSID format stores 6502 machine code along with metadata
+/// (title, author, release info) and playback parameters.
 #[derive(Debug)]
 pub struct SidFile {
+    /// File format identifier ("PSID" or "RSID")
     #[allow(dead_code)] // Parsed for format validation
     pub magic: String,
+    /// PSID version (1, 2, 3, or 4)
     pub version: u16,
+    /// Offset to binary data in original file
     #[allow(dead_code)] // Parsed for completeness
     pub data_offset: u16,
+    /// C64 memory address where data is loaded
     pub load_address: u16,
+    /// Entry point for song initialization
     pub init_address: u16,
+    /// Entry point called each frame during playback
     pub play_address: u16,
+    /// Number of songs in the file
     pub songs: u16,
+    /// Default song to play (1-indexed)
     pub start_song: u16,
+    /// Per-song timing flags (bit set = CIA, clear = VBI)
     #[allow(dead_code)] // For future CIA timing support
     pub speed: u32,
+    /// Song title from file header
     pub name: String,
+    /// Composer/artist name
     pub author: String,
+    /// Release year and publisher
     pub released: String,
+    /// v2+ flags: video standard, SID model, etc.
     pub flags: u16,
+    /// 6502 machine code and data
     pub data: Vec<u8>,
 }
 
 impl SidFile {
+    /// Loads and parses a PSID/RSID file from disk.
     pub fn load<P: AsRef<Path>>(path: P) -> io::Result<Self> {
         let bytes = fs::read(path)?;
         Self::parse(&bytes)
@@ -114,6 +133,10 @@ impl SidFile {
         })
     }
 
+    /// Returns true if the tune should use PAL timing (50Hz).
+    ///
+    /// Most European C64 software used PAL; NTSC (60Hz) was common in North America.
+    /// Defaults to PAL for v1 files or when the flag indicates PAL-compatible.
     pub const fn is_pal(&self) -> bool {
         if self.version >= 2 {
             let video_standard = (self.flags >> 2) & 0x03;
@@ -123,6 +146,10 @@ impl SidFile {
         }
     }
 
+    /// Returns true if the song uses CIA timer-based playback instead of VBI.
+    ///
+    /// Most tunes sync to the vertical blank interrupt (50/60Hz), but some
+    /// use CIA timers for custom playback rates.
     #[allow(dead_code)] // For future CIA timing support
     pub const fn uses_cia_timing(&self, song: u16) -> bool {
         if song == 0 || song > 32 {

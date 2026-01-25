@@ -8,12 +8,20 @@ const RAM_SIZE: usize = 65536;
 const SID_BASE: u16 = 0xD400;
 const SID_END: u16 = 0xD41C;
 
+/// Emulated C64 memory map with SID chip at $D400-$D41C.
+///
+/// Provides 64KB RAM with memory-mapped I/O for the SID sound chip.
+/// All other I/O areas (VIC, CIA, etc.) are treated as plain RAM since
+/// SID playback only requires the sound chip.
 pub struct C64Memory {
+    /// 64KB RAM, heap-allocated to avoid stack overflow
     ram: Box<[u8]>,
+    /// SID sound chip mapped at $D400
     pub sid: Sid,
 }
 
 impl C64Memory {
+    /// Creates memory with zeroed RAM and a SID chip of the specified model.
     pub fn new(chip_model: ChipModel) -> Self {
         Self {
             ram: vec![0; RAM_SIZE].into_boxed_slice(),
@@ -21,6 +29,7 @@ impl C64Memory {
         }
     }
 
+    /// Loads binary data into RAM at the specified address.
     pub fn load(&mut self, address: u16, data: &[u8]) {
         let start = address as usize;
         let end = (start + data.len()).min(RAM_SIZE);

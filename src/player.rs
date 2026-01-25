@@ -20,27 +20,50 @@ const SCOPE_BUFFER_SIZE: usize = 1024;
 /// Envelope sampling divisor (sample envelope every N audio samples)
 const ENVELOPE_SAMPLE_DIVISOR: usize = 4;
 
+/// SID music player combining 6502 CPU and SID chip emulation.
+///
+/// Executes the SID tune's play routine at the correct frame rate while
+/// generating audio samples. Supports PAL/NTSC timing and both SID chip models.
 pub struct Player {
+    /// 6502 CPU with C64 memory map
     cpu: CPU<C64Memory, Nmos6502>,
+    /// Address of the play routine called each frame
     play_address: u16,
+    /// Address of the init routine for song setup
     init_address: u16,
+    /// Memory address where tune data is loaded
     load_address: u16,
+    /// Original tune data for reloading on song change
     sid_data: Vec<u8>,
+    /// CPU cycles per video frame (PAL: 19656, NTSC: 17045)
     cycles_per_frame: u32,
+    /// Fractional cycles to run per audio sample
     cycles_per_sample: f64,
+    /// Accumulated fractional cycles between samples
     cycle_accumulator: f64,
+    /// Cycles elapsed in current frame
     frame_cycle_count: u32,
+    /// Playback paused state
     paused: bool,
-    /// Per-voice envelope history for channel scopes
+    /// Per-voice envelope history for oscilloscope display
     envelope_history: [Box<[f32; SCOPE_BUFFER_SIZE]>; 3],
+    /// Write position in envelope ring buffers
     envelope_write_pos: usize,
+    /// Counter for downsampling envelope captures
     envelope_sample_counter: usize,
+    /// Currently emulated SID chip variant
     chip_model: ChipModel,
+    /// System clock frequency (PAL or NTSC)
     clock_hz: u32,
+    /// Audio output sample rate
     sample_rate: u32,
 }
 
 impl Player {
+    /// Creates a player for the given SID file and song number (1-indexed).
+    ///
+    /// Loads the tune into emulated memory, runs the init routine, and
+    /// configures timing based on PAL/NTSC detection from the file header.
     pub fn new(
         sid_file: &SidFile,
         song: u16,
@@ -116,6 +139,10 @@ impl Player {
         }
     }
 
+    /// Fills the buffer with audio samples, advancing emulation accordingly.
+    ///
+    /// Each sample triggers the appropriate number of CPU/SID clock cycles
+    /// to maintain cycle-accurate timing between the 1MHz system and audio rate.
     pub fn fill_buffer(&mut self, buffer: &mut [f32]) {
         if self.paused {
             buffer.fill(0.0);
@@ -163,10 +190,12 @@ impl Player {
         })
     }
 
+    /// Toggles between playing and paused states.
     pub const fn toggle_pause(&mut self) {
         self.paused = !self.paused;
     }
 
+    /// Returns whether playback is currently paused.
     pub const fn is_paused(&self) -> bool {
         self.paused
     }
@@ -212,6 +241,7 @@ impl Player {
         state.envelope_counter
     }
 
+    /// Returns the currently emulated SID chip model.
     pub const fn chip_model(&self) -> ChipModel {
         self.chip_model
     }
@@ -261,8 +291,10 @@ impl Player {
     }
 }
 
+/// Thread-safe handle for sharing the player between audio and UI threads.
 pub type SharedPlayer = Arc<Mutex<Player>>;
 
+/// Creates a player wrapped for thread-safe sharing.
 pub fn create_shared_player(
     sid_file: &SidFile,
     song: u16,
