@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Mikael Lund
 
+use crate::hvsc::HvscBrowser;
 use crate::player::SharedPlayer;
 use crate::playlist::Playlist;
 use crate::sid_file::SidFile;
@@ -104,23 +105,26 @@ impl VoiceScopes {
     }
 }
 
-/// Browser state for playlist navigation.
-pub struct Browser {
-    playlist: Playlist,
-    state: ListState,
-    /// Currently loaded SID file (owned since we may load from URLs)
-    current_sid: Option<SidFile>,
+/// Which browser panel has focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserFocus {
+    Playlist,
+    Hvsc,
 }
 
-impl Browser {
+/// Browser state for playlist navigation.
+pub struct PlaylistBrowser {
+    playlist: Playlist,
+    state: ListState,
+}
+
+impl PlaylistBrowser {
     fn new(playlist: Playlist) -> Self {
         let mut state = ListState::default();
-        state.select(Some(0));
-        Self {
-            playlist,
-            state,
-            current_sid: None,
+        if !playlist.is_empty() {
+            state.select(Some(0));
         }
+        Self { playlist, state }
     }
 
     fn selected_index(&self) -> usize {
@@ -137,8 +141,7 @@ impl Browser {
     }
 
     fn select_prev(&mut self) {
-        let i = self.selected_index();
-        self.state.select(Some(i.saturating_sub(1)));
+        self.state.select(Some(self.selected_index().saturating_sub(1)));
     }
 }
 
@@ -152,7 +155,14 @@ pub struct App<'a> {
     chip_model: ChipModel,
     vu_meter: VuMeter,
     voice_scopes: VoiceScopes,
-    browser: Option<Browser>,
+    /// Playlist browser (upper left)
+    playlist_browser: Option<PlaylistBrowser>,
+    /// HVSC browser (lower left)
+    hvsc_browser: HvscBrowser,
+    /// Which browser panel has focus
+    browser_focus: BrowserFocus,
+    /// Currently loaded SID from browsers (owned for URL loads)
+    current_browser_sid: Option<SidFile>,
 }
 
 impl<'a> App<'a> {
@@ -162,6 +172,11 @@ impl<'a> App<'a> {
             .lock()
             .map(|p| p.chip_model())
             .unwrap_or(ChipModel::Mos6581);
+
+        let mut hvsc_browser = HvscBrowser::new();
+        // Load STIL in the background (blocking for now, could be async)
+        hvsc_browser.load_stil();
+
         Self {
             player,
             sid_file,
@@ -171,7 +186,10 @@ impl<'a> App<'a> {
             chip_model,
             vu_meter: VuMeter::new(),
             voice_scopes: VoiceScopes::new(),
-            browser: None,
+            playlist_browser: None,
+            hvsc_browser,
+            browser_focus: BrowserFocus::Hvsc,
+            current_browser_sid: None,
         }
     }
 
@@ -183,7 +201,8 @@ impl<'a> App<'a> {
         playlist: Playlist,
     ) -> Self {
         let mut app = Self::new(player, sid_file, song);
-        app.browser = Some(Browser::new(playlist));
+        app.playlist_browser = Some(PlaylistBrowser::new(playlist));
+        app.browser_focus = BrowserFocus::Playlist;
         app
     }
 
@@ -228,21 +247,52 @@ impl<'a> App<'a> {
         }
     }
 
+    fn toggle_browser_focus(&mut self) {
+        self.browser_focus = match self.browser_focus {
+            BrowserFocus::Playlist if self.playlist_browser.is_some() => BrowserFocus::Hvsc,
+            BrowserFocus::Hvsc if self.playlist_browser.is_some() => BrowserFocus::Playlist,
+            _ => self.browser_focus,
+        };
+    }
+
     fn browser_next(&mut self) {
-        if let Some(browser) = &mut self.browser {
-            browser.select_next();
+        match self.browser_focus {
+            BrowserFocus::Playlist => {
+                if let Some(browser) = &mut self.playlist_browser {
+                    browser.select_next();
+                }
+            }
+            BrowserFocus::Hvsc => self.hvsc_browser.select_next(),
         }
     }
 
     fn browser_prev(&mut self) {
-        if let Some(browser) = &mut self.browser {
-            browser.select_prev();
+        match self.browser_focus {
+            BrowserFocus::Playlist => {
+                if let Some(browser) = &mut self.playlist_browser {
+                    browser.select_prev();
+                }
+            }
+            BrowserFocus::Hvsc => self.hvsc_browser.select_prev(),
         }
     }
 
-    /// Loads the currently selected playlist entry.
+    fn browser_back(&mut self) {
+        if self.browser_focus == BrowserFocus::Hvsc {
+            self.hvsc_browser.go_up();
+        }
+    }
+
+    /// Loads the currently selected entry (playlist or HVSC).
     fn load_selected(&mut self) {
-        let Some(browser) = &mut self.browser else {
+        match self.browser_focus {
+            BrowserFocus::Playlist => self.load_playlist_selected(),
+            BrowserFocus::Hvsc => self.load_hvsc_selected(),
+        }
+    }
+
+    fn load_playlist_selected(&mut self) {
+        let Some(browser) = &self.playlist_browser else {
             return;
         };
 
@@ -253,10 +303,27 @@ impl<'a> App<'a> {
 
         let sid_file = match entry.load() {
             Ok(f) => f,
-            Err(_) => return, // Silently skip on load error
+            Err(_) => return,
         };
 
         let song = entry.subsong.unwrap_or(sid_file.start_song);
+        self.play_sid_file(sid_file, song);
+    }
+
+    fn load_hvsc_selected(&mut self) {
+        // Enter directory or load file
+        if let Some(entry) = self.hvsc_browser.enter() {
+            // It's a file, load it
+            let sid_file = match entry.load() {
+                Ok(f) => f,
+                Err(_) => return,
+            };
+            let start_song = sid_file.start_song;
+            self.play_sid_file(sid_file, start_song);
+        }
+    }
+
+    fn play_sid_file(&mut self, sid_file: SidFile, song: u16) {
         self.current_song = song;
         self.total_songs = sid_file.songs;
 
@@ -265,15 +332,12 @@ impl<'a> App<'a> {
             self.chip_model = player.chip_model();
         }
 
-        browser.current_sid = Some(sid_file);
+        self.current_browser_sid = Some(sid_file);
     }
 
-    /// Returns the SID file to display metadata from (browser's current or initial).
+    /// Returns the SID file to display metadata from.
     fn display_sid(&self) -> &SidFile {
-        self.browser
-            .as_ref()
-            .and_then(|b| b.current_sid.as_ref())
-            .unwrap_or(self.sid_file)
+        self.current_browser_sid.as_ref().unwrap_or(self.sid_file)
     }
 }
 
@@ -326,6 +390,8 @@ fn run_app(mut terminal: DefaultTerminal, mut app: App) -> io::Result<()> {
                 KeyCode::Up | KeyCode::Char('k') => app.browser_prev(),
                 KeyCode::Down | KeyCode::Char('j') => app.browser_next(),
                 KeyCode::Enter => app.load_selected(),
+                KeyCode::Tab => app.toggle_browser_focus(),
+                KeyCode::Backspace | KeyCode::Char('h') => app.browser_back(),
                 _ => {}
             }
         }
@@ -335,18 +401,19 @@ fn run_app(mut terminal: DefaultTerminal, mut app: App) -> io::Result<()> {
 fn draw(frame: &mut Frame, app: &mut App) {
     let full_area = frame.area();
 
-    // If browser exists, split horizontally: browser left, player right
-    let (browser_area, player_area) = if app.browser.is_some() {
-        let [left, right] =
-            Layout::horizontal([Constraint::Length(30), Constraint::Min(60)]).areas(full_area);
-        (Some(left), right)
-    } else {
-        (None, full_area)
-    };
+    // Always show browser panel on left
+    let [browser_area, player_area] =
+        Layout::horizontal([Constraint::Length(32), Constraint::Min(60)]).areas(full_area);
 
-    // Draw browser if present
-    if let Some(area) = browser_area {
-        draw_browser(frame, area, app);
+    // Split browser area: playlist on top (if present), HVSC on bottom
+    if app.playlist_browser.is_some() {
+        let [playlist_area, hvsc_area] =
+            Layout::vertical([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
+                .areas(browser_area);
+        draw_playlist_browser(frame, playlist_area, app);
+        draw_hvsc_browser(frame, hvsc_area, app);
+    } else {
+        draw_hvsc_browser(frame, browser_area, app);
     }
 
     // Player area layout
@@ -367,28 +434,34 @@ fn draw(frame: &mut Frame, app: &mut App) {
     draw_footer(frame, footer_area, app);
 }
 
-fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App) {
-    let Some(browser) = &mut app.browser else {
+fn draw_playlist_browser(frame: &mut Frame, area: Rect, app: &mut App) {
+    let Some(browser) = &mut app.playlist_browser else {
         return;
+    };
+
+    let is_focused = app.browser_focus == BrowserFocus::Playlist;
+    let border_color = if is_focused {
+        Color::Cyan
+    } else {
+        Color::DarkGray
     };
 
     let block = Block::default()
         .title(" Playlist ")
         .title_style(Style::default().fg(Color::Cyan).bold())
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(border_color));
 
     let items: Vec<ListItem> = browser
         .playlist
         .entries
         .iter()
         .map(|entry| {
-            let style = Style::default().fg(Color::White);
             let mut name = entry.display_name.clone();
             if let Some(sub) = entry.subsong {
                 name.push_str(&format!(" @{sub}"));
             }
-            ListItem::new(name).style(style)
+            ListItem::new(name).style(Style::default().fg(Color::White))
         })
         .collect();
 
@@ -400,9 +473,69 @@ fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("> ");
+        .highlight_symbol(if is_focused { "> " } else { "  " });
 
     frame.render_stateful_widget(list, area, &mut browser.state);
+}
+
+/// Formats HVSC entry for display, enriching with STIL metadata when available.
+fn format_hvsc_entry(entry: &crate::hvsc::HvscEntry, stil: Option<&crate::hvsc::StilDatabase>) -> (String, Style) {
+    if entry.is_dir {
+        return (format!("{}/", entry.name), Style::default().fg(Color::Yellow));
+    }
+
+    let stil_title = stil
+        .and_then(|db| db.get(&entry.path))
+        .and_then(|info| info.title.as_ref());
+
+    let display = match stil_title {
+        Some(title) => format!("{} - {title}", entry.name.trim_end_matches(".sid")),
+        None => entry.name.clone(),
+    };
+
+    (display, Style::default().fg(Color::White))
+}
+
+fn draw_hvsc_browser(frame: &mut Frame, area: Rect, app: &mut App) {
+    let is_focused = app.browser_focus == BrowserFocus::Hvsc;
+    let border_color = if is_focused { Color::Cyan } else { Color::DarkGray };
+
+    let title = if app.hvsc_browser.current_path == "/" {
+        " HVSC ".to_string()
+    } else {
+        format!(" HVSC: {} ", app.hvsc_browser.current_path)
+    };
+
+    let block = Block::default()
+        .title(title)
+        .title_style(Style::default().fg(Color::Yellow).bold())
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+
+    let items: Vec<ListItem> = app
+        .hvsc_browser
+        .entries
+        .iter()
+        .map(|entry| {
+            let (name, style) = format_hvsc_entry(entry, app.hvsc_browser.stil.as_ref());
+            ListItem::new(name).style(style)
+        })
+        .collect();
+
+    let mut list_state = ListState::default();
+    list_state.select(Some(app.hvsc_browser.selected));
+
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(if is_focused { "> " } else { "  " });
+
+    frame.render_stateful_widget(list, area, &mut list_state);
 }
 
 fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
@@ -574,24 +707,26 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled("\u{2502} ", Style::default().fg(Color::DarkGray)),
         Span::styled("s", Style::default().fg(Color::Cyan).bold()),
         Span::styled(" SID ", Style::default().fg(Color::DarkGray)),
+        Span::styled("\u{2502} ", Style::default().fg(Color::DarkGray)),
+        Span::styled("\u{2191}\u{2193}", Style::default().fg(Color::Cyan).bold()),
+        Span::styled(" Nav ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Enter", Style::default().fg(Color::Cyan).bold()),
+        Span::styled(" Play ", Style::default().fg(Color::DarkGray)),
+        Span::styled("BS", Style::default().fg(Color::Cyan).bold()),
+        Span::styled(" Back ", Style::default().fg(Color::DarkGray)),
     ];
 
-    // Add browser keys if playlist is present
-    if app.browser.is_some() {
+    // Add Tab key if playlist is present
+    if app.playlist_browser.is_some() {
         spans.extend([
-            Span::styled("\u{2502} ", Style::default().fg(Color::DarkGray)),
-            Span::styled("\u{2191}\u{2193}", Style::default().fg(Color::Cyan).bold()),
-            Span::styled(" Browse ", Style::default().fg(Color::DarkGray)),
-            Span::styled("Enter", Style::default().fg(Color::Cyan).bold()),
-            Span::styled(" Load ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Tab", Style::default().fg(Color::Cyan).bold()),
+            Span::styled(" Switch ", Style::default().fg(Color::DarkGray)),
         ]);
     }
 
     spans.extend([
         Span::styled("\u{2502} ", Style::default().fg(Color::DarkGray)),
         Span::styled("q", Style::default().fg(Color::Cyan).bold()),
-        Span::styled("/", Style::default().fg(Color::DarkGray)),
-        Span::styled("ESC", Style::default().fg(Color::Cyan).bold()),
         Span::styled(" Quit", Style::default().fg(Color::DarkGray)),
     ]);
 

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Mikael Lund
 
+mod hvsc;
 mod memory;
 mod player;
 mod playlist;
