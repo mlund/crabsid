@@ -767,7 +767,18 @@ fn logo_lines() -> Vec<Line<'static>> {
             Span::styled("╩ ", i),
             Span::styled("═╩╝", d),
         ]),
-        Line::from(""),
+        Line::from(vec![
+            Span::raw("                      "),
+            Span::styled("B", d),
+            Span::styled("y", i),
+            Span::raw(" "),
+            Span::styled("W", s),
+            Span::styled("o", b),
+            Span::styled("m", a),
+            Span::styled("b", r),
+            Span::styled("a", c),
+            Span::styled("t", d),
+        ]),
     ]
 }
 
@@ -804,7 +815,16 @@ fn draw_vu_meters(frame: &mut Frame, area: Rect, app: &App) {
         .max(100)
         .direction(ratatui::layout::Direction::Vertical);
 
-    frame.render_widget(chart, inner);
+    // Center the chart horizontally
+    let chart_width = 3 * 8 + 2 * 3; // 3 bars + 2 gaps
+    let [_, centered, _] = Layout::horizontal([
+        Constraint::Min(0),
+        Constraint::Length(chart_width),
+        Constraint::Min(0),
+    ])
+    .areas(inner);
+
+    frame.render_widget(chart, centered);
 }
 
 fn draw_voice_scopes(frame: &mut Frame, area: Rect, app: &App) {
