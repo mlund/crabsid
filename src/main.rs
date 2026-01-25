@@ -84,7 +84,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (dummy, 1)
     };
 
-    let player = create_shared_player(&sid_file, initial_song, SAMPLE_RATE, args.chip);
+    let player = create_shared_player(&sid_file, initial_song, SAMPLE_RATE, args.chip)?;
 
     let params = OutputDeviceParameters {
         channels_count: 1,
@@ -96,8 +96,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _device = run_output_device(params, {
         let player = player.clone();
         move |data| {
-            if let Ok(mut p) = player.lock() {
-                p.fill_buffer(data);
+            if let Ok(mut p) = player.lock()
+                && let Err(e) = p.fill_buffer(data)
+            {
+                eprintln!("Playback error: {e}");
             }
         }
     })?;

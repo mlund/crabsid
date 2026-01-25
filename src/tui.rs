@@ -451,18 +451,14 @@ impl<'a> App<'a> {
     fn next_song(&mut self) {
         if self.current_song < self.total_songs {
             self.current_song += 1;
-            if let Ok(mut player) = self.player.lock() {
-                player.load_song(self.current_song);
-            }
+            self.load_song_on_player(self.current_song);
         }
     }
 
     fn prev_song(&mut self) {
         if self.current_song > 1 {
             self.current_song -= 1;
-            if let Ok(mut player) = self.player.lock() {
-                player.load_song(self.current_song);
-            }
+            self.load_song_on_player(self.current_song);
         }
     }
 
@@ -576,9 +572,22 @@ impl<'a> App<'a> {
         self.current_song = song;
         self.total_songs = sid_file.songs;
 
-        if let Ok(mut player) = self.player.lock() {
-            player.load_sid_file(&sid_file, song);
-            self.chip_model = player.chip_model();
+        let error = match self.player.lock() {
+            Ok(mut player) => {
+                let res = player.load_sid_file(&sid_file, song);
+                let chip = player.chip_model();
+                match res {
+                    Ok(_) => {
+                        self.chip_model = chip;
+                        None
+                    }
+                    Err(e) => Some(format!("Init error: {e}")),
+                }
+            }
+            Err(_) => Some("Init error: player lock poisoned".to_string()),
+        };
+        if let Some(msg) = error {
+            self.show_error(msg);
         }
 
         self.current_browser_sid = Some(sid_file);
@@ -589,9 +598,20 @@ impl<'a> App<'a> {
     fn goto_song(&mut self, song: u16) {
         if song >= 1 && song <= self.total_songs {
             self.current_song = song;
-            if let Ok(mut player) = self.player.lock() {
-                player.load_song(song);
-            }
+            self.load_song_on_player(song);
+        }
+    }
+
+    fn load_song_on_player(&mut self, song: u16) {
+        let error = match self.player.lock() {
+            Ok(mut player) => player
+                .load_song(song)
+                .err()
+                .map(|e| format!("Init error: {e}")),
+            Err(_) => Some("Init error: player lock poisoned".to_string()),
+        };
+        if let Some(msg) = error {
+            self.show_error(msg);
         }
     }
 

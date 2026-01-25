@@ -9,6 +9,7 @@ use mos6502::memory::Bus;
 use mos6502::registers::StackPointer;
 use resid::{ChipModel, SamplingMethod};
 use std::sync::{Arc, Mutex};
+use std::{error, fmt};
 
 const PAL_CLOCK_HZ: u32 = 985_248;
 const NTSC_CLOCK_HZ: u32 = 1_022_727;
@@ -59,6 +60,38 @@ pub struct Player {
     sample_rate: u32,
 }
 
+/// Errors that can occur while initializing or running SID routines.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PlayerError {
+    /// The init routine never returned before the step limit.
+    InitTimeout { steps: u32, address: u16 },
+    /// The play routine never returned before the step limit.
+    PlayTimeout { steps: u32, address: u16 },
+}
+
+impl fmt::Display for PlayerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InitTimeout { steps, address } => {
+                write!(
+                    f,
+                    "SID init routine at ${address:04X} exceeded {steps} steps"
+                )
+            }
+            Self::PlayTimeout { steps, address } => {
+                write!(
+                    f,
+                    "SID play routine at ${address:04X} exceeded {steps} steps"
+                )
+            }
+        }
+    }
+}
+
+impl error::Error for PlayerError {}
+
+type PlayerResult<T> = Result<T, PlayerError>;
+
 impl Player {
     /// Creates a player for the given SID file and song number (1-indexed).
     ///
@@ -69,53 +102,15 @@ impl Player {
         song: u16,
         sample_rate: u32,
         chip_override: Option<u16>,
-    ) -> Self {
-        let is_pal = sid_file.is_pal();
-        let clock_hz = if is_pal { PAL_CLOCK_HZ } else { NTSC_CLOCK_HZ };
-        let cycles_per_frame = if is_pal {
-            PAL_FRAME_CYCLES
-        } else {
-            NTSC_FRAME_CYCLES
-        };
+    ) -> PlayerResult<Self> {
+        let (clock_hz, cycles_per_frame) = timing_from_file(sid_file);
+        let chip_model = select_chip_model(sid_file, chip_override);
 
-        let chip_model = match chip_override {
-            Some(8580) => ChipModel::Mos8580,
-            None if (sid_file.flags >> 4) & 0x03 == 2 => ChipModel::Mos8580,
-            Some(_) | None => ChipModel::Mos6581,
-        };
+        let mut cpu = bootstrap_cpu(sid_file, chip_model, sample_rate, clock_hz, song);
 
-        let mut memory = C64Memory::new(chip_model);
+        run_init(&mut cpu, sid_file.init_address)?;
 
-        memory
-            .sid
-            .set_sampling_parameters(SamplingMethod::Fast, clock_hz, sample_rate);
-
-        memory.load(sid_file.load_address, &sid_file.data);
-
-        let mut cpu = CPU::new(memory, Nmos6502);
-
-        // SID tunes expect to be called via JSR and return via RTS.
-        // We simulate this by placing RTS at $0000 and pushing $FFFF on stack.
-        // When the tune's RTS pops $FFFF, PC wraps to $0000 and hits our RTS,
-        // which we detect as the signal that the routine has completed.
-        cpu.memory.set_byte(0x0000, 0x60);
-        cpu.memory.set_byte(0x01FF, 0xFF);
-        cpu.memory.set_byte(0x01FE, 0xFF);
-        cpu.registers.stack_pointer = StackPointer(0xFD);
-        // SID files use 1-indexed songs, 6502 accumulator is 0-indexed
-        #[allow(clippy::cast_possible_truncation)]
-        let song_index = song.saturating_sub(1) as u8;
-        cpu.registers.accumulator = song_index;
-        cpu.registers.program_counter = sid_file.init_address;
-
-        for _ in 0..1_000_000 {
-            if cpu.registers.program_counter == 0x0000 {
-                break;
-            }
-            cpu.single_step();
-        }
-
-        Self {
+        Ok(Self {
             cpu,
             play_address: sid_file.play_address,
             init_address: sid_file.init_address,
@@ -136,17 +131,17 @@ impl Player {
             chip_model,
             clock_hz,
             sample_rate,
-        }
+        })
     }
 
     /// Fills the buffer with audio samples, advancing emulation accordingly.
     ///
     /// Each sample triggers the appropriate number of CPU/SID clock cycles
     /// to maintain cycle-accurate timing between the 1MHz system and audio rate.
-    pub fn fill_buffer(&mut self, buffer: &mut [f32]) {
+    pub fn fill_buffer(&mut self, buffer: &mut [f32]) -> PlayerResult<()> {
         if self.paused {
             buffer.fill(0.0);
-            return;
+            return Ok(());
         }
 
         for sample in buffer.iter_mut() {
@@ -158,7 +153,7 @@ impl Player {
             for _ in 0..cycles_to_run {
                 if self.frame_cycle_count >= self.cycles_per_frame {
                     self.frame_cycle_count = 0;
-                    self.call_play();
+                    self.call_play()?;
                 }
 
                 self.cpu.memory.sid.clock();
@@ -178,6 +173,7 @@ impl Player {
                 self.envelope_write_pos = (self.envelope_write_pos + 1) % SCOPE_BUFFER_SIZE;
             }
         }
+        Ok(())
     }
 
     /// Returns envelope history for each voice, ordered oldest to newest
@@ -201,7 +197,7 @@ impl Player {
     }
 
     /// Loads a completely new SID file, replacing the current tune.
-    pub fn load_sid_file(&mut self, sid_file: &SidFile, song: u16) {
+    pub fn load_sid_file(&mut self, sid_file: &SidFile, song: u16) -> PlayerResult<()> {
         let is_pal = sid_file.is_pal();
         self.clock_hz = if is_pal { PAL_CLOCK_HZ } else { NTSC_CLOCK_HZ };
         self.cycles_per_frame = if is_pal {
@@ -237,12 +233,13 @@ impl Player {
             self.sample_rate,
         );
 
-        self.load_song(song);
+        self.load_song(song)?;
+        Ok(())
     }
 
     /// Reinitialize for a different song number (1-indexed).
     /// Reloads SID data, resets CPU state, and runs the init routine.
-    pub fn load_song(&mut self, song: u16) {
+    pub fn load_song(&mut self, song: u16) -> PlayerResult<()> {
         // Reload the SID data to reset any modified memory
         self.cpu.memory.load(self.load_address, &self.sid_data);
 
@@ -260,17 +257,13 @@ impl Player {
         self.cpu.registers.program_counter = self.init_address;
 
         // Run init routine
-        for _ in 0..1_000_000 {
-            if self.cpu.registers.program_counter == 0x0000 {
-                break;
-            }
-            self.cpu.single_step();
-        }
+        run_init(&mut self.cpu, self.init_address)?;
 
         // Reset playback state
         self.cycle_accumulator = 0.0;
         self.frame_cycle_count = 0;
         self.paused = false;
+        Ok(())
     }
 
     /// Returns envelope levels (0-255) for all three SID voices.
@@ -310,10 +303,10 @@ impl Player {
         }
     }
 
-    fn call_play(&mut self) {
+    fn call_play(&mut self) -> PlayerResult<()> {
         // play_address == 0 means the tune uses IRQ-driven playback
         if self.play_address == 0 {
-            return;
+            return Ok(());
         }
 
         // Reset stack for each call to handle tunes that don't balance the stack
@@ -322,13 +315,104 @@ impl Player {
         self.cpu.registers.stack_pointer = StackPointer(0xFD);
         self.cpu.registers.program_counter = self.play_address;
 
-        for _ in 0..100_000 {
-            if self.cpu.registers.program_counter == 0x0000 {
-                break;
-            }
-            self.cpu.single_step();
-        }
+        run_play(&mut self.cpu, self.play_address)?;
+        Ok(())
     }
+}
+
+fn timing_from_file(sid_file: &SidFile) -> (u32, u32) {
+    let clock_hz = if sid_file.is_pal() {
+        PAL_CLOCK_HZ
+    } else {
+        NTSC_CLOCK_HZ
+    };
+    let cycles_per_frame = if sid_file.is_pal() {
+        PAL_FRAME_CYCLES
+    } else {
+        NTSC_FRAME_CYCLES
+    };
+    (clock_hz, cycles_per_frame)
+}
+
+fn select_chip_model(sid_file: &SidFile, chip_override: Option<u16>) -> ChipModel {
+    match chip_override {
+        Some(8580) => ChipModel::Mos8580,
+        None if (sid_file.flags >> 4) & 0x03 == 2 => ChipModel::Mos8580,
+        Some(_) | None => ChipModel::Mos6581,
+    }
+}
+
+fn bootstrap_cpu(
+    sid_file: &SidFile,
+    chip_model: ChipModel,
+    sample_rate: u32,
+    clock_hz: u32,
+    song: u16,
+) -> CPU<C64Memory, Nmos6502> {
+    let mut memory = C64Memory::new(chip_model);
+    memory
+        .sid
+        .set_sampling_parameters(SamplingMethod::Fast, clock_hz, sample_rate);
+    memory.load(sid_file.load_address, &sid_file.data);
+
+    let mut cpu = CPU::new(memory, Nmos6502);
+    setup_stack_for_rts(&mut cpu);
+
+    #[allow(clippy::cast_possible_truncation)]
+    let song_index = song.saturating_sub(1) as u8;
+    cpu.registers.accumulator = song_index;
+    cpu.registers.program_counter = sid_file.init_address;
+    cpu
+}
+
+fn setup_stack_for_rts(cpu: &mut CPU<C64Memory, Nmos6502>) {
+    // Tunes expect JSR/RTS pairing; place an RTS at $0000 and push $FFFF
+    cpu.memory.set_byte(0x0000, 0x60);
+    cpu.memory.set_byte(0x01FF, 0xFF);
+    cpu.memory.set_byte(0x01FE, 0xFF);
+    cpu.registers.stack_pointer = StackPointer(0xFD);
+}
+
+fn run_init(cpu: &mut CPU<C64Memory, Nmos6502>, init_address: u16) -> PlayerResult<()> {
+    run_routine(
+        cpu,
+        init_address,
+        1_000_000,
+        PlayerError::InitTimeout {
+            steps: 1_000_000,
+            address: init_address,
+        },
+    )
+}
+
+fn run_play(cpu: &mut CPU<C64Memory, Nmos6502>, play_address: u16) -> PlayerResult<()> {
+    run_routine(
+        cpu,
+        play_address,
+        100_000,
+        PlayerError::PlayTimeout {
+            steps: 100_000,
+            address: play_address,
+        },
+    )
+}
+
+fn run_routine(
+    cpu: &mut CPU<C64Memory, Nmos6502>,
+    address: u16,
+    max_steps: u32,
+    timeout_err: PlayerError,
+) -> PlayerResult<()> {
+    let mut steps = 0;
+    while steps < max_steps {
+        if cpu.registers.program_counter == 0x0000 {
+            return Ok(());
+        }
+        cpu.single_step();
+        steps += 1;
+    }
+    let _ = address; // address kept for symmetry; timeout carries it
+    Err(timeout_err)
 }
 
 /// Thread-safe handle for sharing the player between audio and UI threads.
@@ -340,11 +424,83 @@ pub fn create_shared_player(
     song: u16,
     sample_rate: u32,
     chip_override: Option<u16>,
-) -> SharedPlayer {
-    Arc::new(Mutex::new(Player::new(
-        sid_file,
-        song,
-        sample_rate,
-        chip_override,
-    )))
+) -> PlayerResult<SharedPlayer> {
+    Player::new(sid_file, song, sample_rate, chip_override).map(|p| Arc::new(Mutex::new(p)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    macro_rules! fill_history {
+        ($player:expr, $voice:expr, $offset:expr) => {
+            for i in 0..SCOPE_BUFFER_SIZE {
+                $player.envelope_history[$voice][i] = i as f32 + $offset;
+            }
+        };
+    }
+
+    macro_rules! assert_sid_registers_eq {
+        ($a:expr, $b:expr, $range:expr) => {
+            for reg in $range {
+                assert_eq!(
+                    $a.sid_register[reg], $b.sid_register[reg],
+                    "register {reg:02X} mismatch"
+                );
+            }
+        };
+    }
+
+    fn dummy_sid() -> SidFile {
+        SidFile {
+            magic: "PSID".to_string(),
+            version: 2,
+            data_offset: 0x7c,
+            load_address: 0x1000,
+            init_address: 0x1000,
+            play_address: 0x1003,
+            songs: 1,
+            start_song: 1,
+            speed: 0,
+            name: String::new(),
+            author: String::new(),
+            released: String::new(),
+            flags: 0,
+            data: vec![0x60, 0x60, 0x60],
+        }
+    }
+
+    #[test]
+    fn envelope_samples_rotate_oldest_first() {
+        let sid = dummy_sid();
+        let mut player = Player::new(&sid, 1, 44_100, None).expect("player init");
+
+        fill_history!(player, 0, 0.0);
+        fill_history!(player, 1, 1000.0);
+        fill_history!(player, 2, 2000.0);
+        player.envelope_write_pos = 3;
+
+        let samples = player.envelope_samples();
+        assert_eq!(samples[0][0], 3.0);
+        assert_eq!(samples[0][1], 4.0);
+        assert_eq!(samples[0].last().copied().unwrap(), 2.0);
+        assert_eq!(samples[1][0], 1003.0);
+        assert_eq!(samples[2][0], 2003.0);
+    }
+
+    #[test]
+    fn switch_chip_preserves_sid_registers() {
+        let sid = dummy_sid();
+        let mut player = Player::new(&sid, 1, 44_100, None).expect("player init");
+
+        for reg in 0..=0x18 {
+            player.cpu.memory.sid.write(reg, reg as u8);
+        }
+        let before = player.cpu.memory.sid.read_state();
+
+        player.switch_chip_model();
+        let after = player.cpu.memory.sid.read_state();
+
+        assert_sid_registers_eq!(before, after, 0..=0x18);
+    }
 }
