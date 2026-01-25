@@ -29,10 +29,12 @@ impl StilDatabase {
     pub fn fetch() -> io::Result<Self> {
         let response = ureq::get(STIL_URL)
             .call()
-            .map_err(|e| io::Error::other(e.to_string()))?;
+            .map_err(|e: ureq::Error| io::Error::other(e.to_string()))?;
 
-        let mut content = String::new();
-        response.into_body().into_reader().read_to_string(&mut content)?;
+        // STIL uses Latin-1 encoding, read as bytes and convert
+        let mut bytes = Vec::new();
+        response.into_body().into_reader().read_to_end(&mut bytes)?;
+        let content: String = bytes.iter().map(|&b| b as char).collect();
 
         Ok(Self::parse(&content))
     }
@@ -45,12 +47,8 @@ impl StilDatabase {
         for line in content.lines() {
             // STIL format: path line starts new entry, field lines are indented
             if line.starts_with('/') && line.ends_with(".sid") {
-                // Save previous entry if exists
-                if let Some(path) = current_path.take()
-                    && (current_entry.title.is_some()
-                        || current_entry.artist.is_some()
-                        || current_entry.comment.is_some())
-                {
+                // Save previous entry (even without metadata, for search)
+                if let Some(path) = current_path.take() {
                     entries.insert(path, current_entry);
                 }
                 current_path = Some(line.to_string());
@@ -70,20 +68,47 @@ impl StilDatabase {
         }
 
         // Don't forget last entry
-        if let Some(path) = current_path
-            && (current_entry.title.is_some()
-                || current_entry.artist.is_some()
-                || current_entry.comment.is_some())
-        {
+        if let Some(path) = current_path {
             entries.insert(path, current_entry);
         }
 
         Self { entries }
     }
 
+    /// Returns the number of entries in the database.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Returns true if the database is empty.
+    #[allow(dead_code)] // Required by clippy for len() method
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     /// Looks up STIL info for a given HVSC path.
     pub fn get(&self, path: &str) -> Option<&StilEntry> {
         self.entries.get(path)
+    }
+
+    /// Searches paths, titles, and artists for entries containing the query (case-insensitive).
+    pub fn search(&self, query: &str) -> Vec<&str> {
+        let query_lower = query.to_lowercase();
+        self.entries
+            .iter()
+            .filter(|(path, entry)| {
+                path.to_lowercase().contains(&query_lower)
+                    || entry
+                        .title
+                        .as_ref()
+                        .is_some_and(|t| t.to_lowercase().contains(&query_lower))
+                    || entry
+                        .artist
+                        .as_ref()
+                        .is_some_and(|a| a.to_lowercase().contains(&query_lower))
+            })
+            .map(|(path, _)| path.as_str())
+            .collect()
     }
 }
 
@@ -130,6 +155,8 @@ pub struct HvscBrowser {
     pub selected: usize,
     /// STIL database for metadata
     pub stil: Option<StilDatabase>,
+    /// STIL loading error (persists across navigation)
+    pub stil_error: Option<String>,
     /// Loading state
     pub loading: bool,
     /// Error message if any
@@ -162,16 +189,17 @@ impl HvscBrowser {
             entries,
             selected: 0,
             stil: None,
+            stil_error: None,
             loading: false,
             error: None,
         }
     }
 
-    /// Fetches the STIL database in the background.
+    /// Fetches the STIL database.
     pub fn load_stil(&mut self) {
         match StilDatabase::fetch() {
             Ok(db) => self.stil = Some(db),
-            Err(e) => self.error = Some(format!("STIL: {e}")),
+            Err(e) => self.stil_error = Some(e.to_string()),
         }
     }
 
@@ -220,8 +248,10 @@ impl HvscBrowser {
         if path == "/" {
             // STIL is expensive to fetch, preserve it across navigation
             let stil = self.stil.take();
+            let stil_error = self.stil_error.take();
             *self = Self::new();
             self.stil = stil;
+            self.stil_error = stil_error;
             return;
         }
 
@@ -267,7 +297,10 @@ fn fetch_directory(path: &str) -> io::Result<Vec<HvscEntry>> {
         .map_err(|e| io::Error::other(e.to_string()))?;
 
     let mut html = String::new();
-    response.into_body().into_reader().read_to_string(&mut html)?;
+    response
+        .into_body()
+        .into_reader()
+        .read_to_string(&mut html)?;
 
     Ok(parse_directory_listing(&html, path))
 }
@@ -284,16 +317,10 @@ fn extract_href(line: &str) -> Option<&str> {
     let href = &rest[..end];
 
     // Apache listings include sort links and parent refs we don't want
-    let dominated_by_nav = href.starts_with('?')
-        || href.starts_with('/')
-        || href.starts_with("http")
-        || href == "../";
+    let dominated_by_nav =
+        href.starts_with('?') || href.starts_with('/') || href.starts_with("http") || href == "../";
 
-    if dominated_by_nav {
-        None
-    } else {
-        Some(href)
-    }
+    if dominated_by_nav { None } else { Some(href) }
 }
 
 /// Parses an Apache-style directory listing HTML.

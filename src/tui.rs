@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Mikael Lund
 
-use crate::hvsc::HvscBrowser;
+use crate::hvsc::{HvscBrowser, HvscEntry};
 use crate::player::SharedPlayer;
 use crate::playlist::Playlist;
 use crate::sid_file::SidFile;
@@ -10,7 +10,6 @@ use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use std::path::PathBuf;
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout, Rect},
@@ -24,6 +23,7 @@ use ratatui::{
 };
 use resid::ChipModel;
 use std::io::{self, stdout};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 const TARGET_FPS: u64 = 30;
@@ -250,7 +250,8 @@ impl PlaylistBrowser {
     }
 
     fn select_prev(&mut self) {
-        self.state.select(Some(self.selected_index().saturating_sub(1)));
+        self.state
+            .select(Some(self.selected_index().saturating_sub(1)));
     }
 }
 
@@ -282,6 +283,12 @@ pub struct App<'a> {
     playlist_modified: bool,
     /// Current voice color scheme index
     color_scheme: usize,
+    /// HVSC search query (None = not searching)
+    hvsc_search: Option<String>,
+    /// HVSC search results (paths from STIL)
+    hvsc_search_results: Vec<String>,
+    /// Current index in search results
+    hvsc_search_index: usize,
 }
 
 impl<'a> App<'a> {
@@ -327,6 +334,93 @@ impl<'a> App<'a> {
             popup: Popup::None,
             playlist_modified,
             color_scheme: 0,
+            hvsc_search: None,
+            hvsc_search_results: Vec::new(),
+            hvsc_search_index: 0,
+        }
+    }
+
+    fn start_hvsc_search(&mut self) {
+        if self.browser_focus == BrowserFocus::Hvsc {
+            self.hvsc_search = Some(String::new());
+            self.hvsc_search_results.clear();
+            self.hvsc_search_index = 0;
+        }
+    }
+
+    fn cancel_hvsc_search(&mut self) {
+        self.hvsc_search = None;
+        self.hvsc_search_results.clear();
+    }
+
+    fn hvsc_search_input(&mut self, ch: char) {
+        if let Some(ref mut query) = self.hvsc_search {
+            query.push(ch);
+            self.update_search_results();
+        }
+    }
+
+    fn hvsc_search_backspace(&mut self) {
+        if let Some(ref mut query) = self.hvsc_search {
+            query.pop();
+            self.update_search_results();
+        }
+    }
+
+    fn update_search_results(&mut self) {
+        let query = match &self.hvsc_search {
+            Some(q) if !q.is_empty() => q.clone(),
+            _ => {
+                self.hvsc_search_results.clear();
+                return;
+            }
+        };
+
+        // Search STIL database for matching paths
+        if let Some(ref stil) = self.hvsc_browser.stil {
+            self.hvsc_search_results = stil.search(&query).into_iter().map(String::from).collect();
+            self.hvsc_search_results.sort();
+            self.hvsc_search_results.truncate(100); // Limit results
+            self.hvsc_search_index = 0;
+        }
+    }
+
+    fn hvsc_search_next(&mut self) {
+        if !self.hvsc_search_results.is_empty() {
+            self.hvsc_search_index = (self.hvsc_search_index + 1) % self.hvsc_search_results.len();
+        }
+    }
+
+    fn hvsc_search_prev(&mut self) {
+        if !self.hvsc_search_results.is_empty() {
+            self.hvsc_search_index = self
+                .hvsc_search_index
+                .checked_sub(1)
+                .unwrap_or(self.hvsc_search_results.len() - 1);
+        }
+    }
+
+    fn hvsc_search_select(&mut self) {
+        if let Some(path) = self
+            .hvsc_search_results
+            .get(self.hvsc_search_index)
+            .cloned()
+        {
+            // Load and play directly from search results
+            let entry = HvscEntry {
+                name: path.rsplit('/').next().unwrap_or(&path).to_string(),
+                path: path.clone(),
+                is_dir: false,
+            };
+            let source = entry.url();
+            match entry.load() {
+                Ok(sid_file) => {
+                    let start_song = sid_file.start_song;
+                    self.play_sid_file(sid_file, start_song, source);
+                }
+                Err(e) => self.show_error(format!("Load error: {e}")),
+            }
+            // Keep search results visible for further exploration
         }
     }
 
@@ -575,10 +669,9 @@ fn run_app(mut terminal: DefaultTerminal, mut app: App) -> io::Result<()> {
         if event::poll(timeout)?
             && let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
+            && let Some(action) = handle_key(&mut app, key.code)
         {
-            if let Some(action) = handle_key(&mut app, key.code) {
-                return action;
-            }
+            return action;
         }
     }
 }
@@ -596,6 +689,11 @@ fn handle_key(app: &mut App, key: KeyCode) -> Option<io::Result<()>> {
         return None;
     }
 
+    // HVSC search mode
+    if app.hvsc_search.is_some() {
+        return handle_hvsc_search(app, key);
+    }
+
     match key {
         KeyCode::Char('q') if app.request_quit() => return Some(Ok(())),
         KeyCode::Esc => app.close_popup(),
@@ -604,6 +702,7 @@ fn handle_key(app: &mut App, key: KeyCode) -> Option<io::Result<()>> {
         KeyCode::Char('c') => app.cycle_colors(),
         KeyCode::Char('h' | '?') => app.show_help(),
         KeyCode::Tab => app.toggle_browser_focus(),
+        KeyCode::Char('/') => app.start_hvsc_search(),
 
         KeyCode::Char(c @ '1'..='9') => app.goto_song(c.to_digit(10).unwrap() as u16),
         KeyCode::Char('+' | 'n') => app.next_song(),
@@ -616,6 +715,19 @@ fn handle_key(app: &mut App, key: KeyCode) -> Option<io::Result<()>> {
         KeyCode::Char('a') => app.add_current_to_playlist(),
         KeyCode::Backspace => handle_backspace(app),
 
+        _ => {}
+    }
+    None
+}
+
+fn handle_hvsc_search(app: &mut App, key: KeyCode) -> Option<io::Result<()>> {
+    match key {
+        KeyCode::Esc => app.cancel_hvsc_search(),
+        KeyCode::Enter => app.hvsc_search_select(),
+        KeyCode::Backspace => app.hvsc_search_backspace(),
+        KeyCode::Char(ch) => app.hvsc_search_input(ch),
+        KeyCode::Up => app.hvsc_search_prev(),
+        KeyCode::Down => app.hvsc_search_next(),
         _ => {}
     }
     None
@@ -647,7 +759,10 @@ fn draw(frame: &mut Frame, app: &mut App) {
     let full_area = frame.area();
 
     // Force black background regardless of terminal theme
-    frame.render_widget(Block::default().style(Style::default().bg(c64::BLACK)), full_area);
+    frame.render_widget(
+        Block::default().style(Style::default().bg(c64::BLACK)),
+        full_area,
+    );
 
     let [browser_area, player_area] =
         Layout::horizontal([Constraint::Length(32), Constraint::Min(60)]).areas(full_area);
@@ -678,7 +793,11 @@ fn draw(frame: &mut Frame, app: &mut App) {
 fn draw_playlist_browser(frame: &mut Frame, area: Rect, app: &mut App) {
     let scheme = *app.scheme();
     let is_focused = app.browser_focus == BrowserFocus::Playlist;
-    let border_color = if is_focused { scheme.border_focus } else { scheme.border_dim };
+    let border_color = if is_focused {
+        scheme.border_focus
+    } else {
+        scheme.border_dim
+    };
 
     let block = Block::default()
         .title(" Playlist ")
@@ -725,7 +844,10 @@ fn format_hvsc_entry(
     scheme: &ColorScheme,
 ) -> (String, Style) {
     if entry.is_dir {
-        return (format!("{}/", entry.name), Style::default().fg(scheme.accent));
+        return (
+            format!("{}/", entry.name),
+            Style::default().fg(scheme.accent),
+        );
     }
 
     let stil_title = stil
@@ -741,12 +863,88 @@ fn format_hvsc_entry(
 }
 
 fn draw_hvsc_browser(frame: &mut Frame, area: Rect, app: &mut App) {
-    let scheme = app.scheme();
+    let scheme = *app.scheme();
     let is_focused = app.browser_focus == BrowserFocus::Hvsc;
-    let border_color = if is_focused { scheme.border_focus } else { scheme.border_dim };
+    let border_color = if is_focused {
+        scheme.border_focus
+    } else {
+        scheme.border_dim
+    };
 
+    // Show search results if searching, otherwise show directory
+    if app.hvsc_search.is_some() {
+        draw_hvsc_search_results(frame, area, app, &scheme, border_color);
+    } else {
+        draw_hvsc_directory(frame, area, app, &scheme, is_focused, border_color);
+    }
+}
+
+fn draw_hvsc_search_results(
+    frame: &mut Frame,
+    area: Rect,
+    app: &mut App,
+    scheme: &ColorScheme,
+    border_color: Color,
+) {
+    let query = app.hvsc_search.as_deref().unwrap_or("");
+    let count = app.hvsc_search_results.len();
+    let title = if let Some(err) = &app.hvsc_browser.stil_error {
+        format!(" Search: {}_ [{}] ", query, err)
+    } else {
+        match &app.hvsc_browser.stil {
+            None => format!(" Search: {}_ [STIL not loaded] ", query),
+            Some(stil) => format!(" Search: {}_ ({} of {} entries) ", query, count, stil.len()),
+        }
+    };
+
+    let block = Block::default()
+        .title(title)
+        .title_style(Style::default().fg(scheme.accent).bold())
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+
+    let items: Vec<ListItem> = app
+        .hvsc_search_results
+        .iter()
+        .map(|path| {
+            // Show just filename
+            let name = path.rsplit('/').next().unwrap_or(path);
+            ListItem::new(name).style(Style::default().fg(scheme.text_primary))
+        })
+        .collect();
+
+    let mut list_state = ListState::default();
+    if !app.hvsc_search_results.is_empty() {
+        list_state.select(Some(app.hvsc_search_index));
+    }
+
+    let inner_height = area.height.saturating_sub(2) as usize;
+    let offset = app.hvsc_search_index.saturating_sub(inner_height / 2);
+    *list_state.offset_mut() = offset;
+
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(
+            Style::default()
+                .bg(scheme.highlight_bg)
+                .fg(scheme.highlight_fg)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("> ");
+
+    frame.render_stateful_widget(list, area, &mut list_state);
+}
+
+fn draw_hvsc_directory(
+    frame: &mut Frame,
+    area: Rect,
+    app: &mut App,
+    scheme: &ColorScheme,
+    is_focused: bool,
+    border_color: Color,
+) {
     let title = if app.hvsc_browser.current_path == "/" {
-        " HVSC ".to_string()
+        " HVSC (/ to search) ".to_string()
     } else {
         format!(" HVSC: {} ", app.hvsc_browser.current_path)
     };
@@ -826,7 +1024,10 @@ fn sid_info_lines(app: &App) -> Vec<Line<'static>> {
     vec![
         Line::from(vec![
             Span::styled("Title:    ", label),
-            Span::styled(sid.name.clone(), Style::default().fg(scheme.text_primary).bold()),
+            Span::styled(
+                sid.name.clone(),
+                Style::default().fg(scheme.text_primary).bold(),
+            ),
         ]),
         Line::from(vec![
             Span::styled("Author:   ", label),
@@ -834,11 +1035,17 @@ fn sid_info_lines(app: &App) -> Vec<Line<'static>> {
         ]),
         Line::from(vec![
             Span::styled("Released: ", label),
-            Span::styled(sid.released.clone(), Style::default().fg(scheme.text_secondary)),
+            Span::styled(
+                sid.released.clone(),
+                Style::default().fg(scheme.text_secondary),
+            ),
         ]),
         Line::from(vec![
             Span::styled("Song:     ", label),
-            Span::styled(format!("{} / {}", app.current_song, app.total_songs), Style::default().fg(scheme.accent)),
+            Span::styled(
+                format!("{} / {}", app.current_song, app.total_songs),
+                Style::default().fg(scheme.accent),
+            ),
             Span::styled("  ", Style::default()),
             Span::styled(chip, Style::default().fg(c64::PURPLE)),
             status,
@@ -961,11 +1168,25 @@ fn draw_voice_scopes(frame: &mut Frame, area: Rect, app: &App) {
     .areas::<3>(area);
 
     for (i, &voice_area) in areas.iter().enumerate() {
-        draw_single_scope(frame, voice_area, &app.voice_scopes.samples[i], voice_names[i], scheme.voices[i], scheme.border_dim);
+        draw_single_scope(
+            frame,
+            voice_area,
+            &app.voice_scopes.samples[i],
+            voice_names[i],
+            scheme.voices[i],
+            scheme.border_dim,
+        );
     }
 }
 
-fn draw_single_scope(frame: &mut Frame, area: Rect, samples: &[f32], title: &str, color: Color, border: Color) {
+fn draw_single_scope(
+    frame: &mut Frame,
+    area: Rect,
+    samples: &[f32],
+    title: &str,
+    color: Color,
+    border: Color,
+) {
     let block = Block::default()
         .title(format!(" {title} "))
         .title_style(Style::default().fg(color))
@@ -1084,9 +1305,10 @@ fn draw_popup(frame: &mut Frame, popup: &Popup) {
 fn help_text() -> Vec<Line<'static>> {
     vec![
         Line::from(""),
-        Line::from(vec![
-            Span::styled("  Player", Style::default().fg(Color::Yellow).bold()),
-        ]),
+        Line::from(vec![Span::styled(
+            "  Player",
+            Style::default().fg(Color::Yellow).bold(),
+        )]),
         Line::from("  SPACE      Toggle play/pause"),
         Line::from("  1-9        Jump to subsong 1-9"),
         Line::from("  +/-        Next/previous subsong"),
@@ -1094,23 +1316,27 @@ fn help_text() -> Vec<Line<'static>> {
         Line::from("  c          Cycle voice color scheme"),
         Line::from("  a          Add current song to playlist"),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("  Playlist", Style::default().fg(Color::Yellow).bold()),
-        ]),
+        Line::from(vec![Span::styled(
+            "  Playlist",
+            Style::default().fg(Color::Yellow).bold(),
+        )]),
         Line::from("  Up/Down    Navigate"),
         Line::from("  Enter      Play selected"),
         Line::from("  Backspace  Remove from playlist"),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("  HVSC Browser", Style::default().fg(Color::Yellow).bold()),
-        ]),
+        Line::from(vec![Span::styled(
+            "  HVSC Browser",
+            Style::default().fg(Color::Yellow).bold(),
+        )]),
         Line::from("  Up/Down    Navigate"),
         Line::from("  Enter      Enter dir / Play file"),
         Line::from("  Left/BS    Go to parent directory"),
+        Line::from("  /          Search (Esc to cancel)"),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("  General", Style::default().fg(Color::Yellow).bold()),
-        ]),
+        Line::from(vec![Span::styled(
+            "  General",
+            Style::default().fg(Color::Yellow).bold(),
+        )]),
         Line::from("  Tab        Switch playlist/HVSC"),
         Line::from("  h/?        Show this help"),
         Line::from("  q          Quit"),
