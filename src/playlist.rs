@@ -63,10 +63,7 @@ fn parse_subsong(s: &str) -> (&str, Option<u16>) {
 
 /// Extracts filename from path or URL.
 fn extract_filename(path: &str) -> String {
-    path.rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(path)
-        .to_string()
+    path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
 }
 
 /// Fetches and parses a SID file from a URL.
@@ -76,10 +73,7 @@ fn load_from_url(url: &str) -> io::Result<SidFile> {
         .map_err(|e| io::Error::other(e.to_string()))?;
 
     let mut bytes = Vec::new();
-    response
-        .into_body()
-        .into_reader()
-        .read_to_end(&mut bytes)?;
+    response.into_body().into_reader().read_to_end(&mut bytes)?;
 
     SidFile::parse(&bytes)
 }
@@ -93,7 +87,9 @@ pub struct Playlist {
 impl Playlist {
     /// Creates an empty playlist.
     pub fn new() -> Self {
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+        }
     }
 
     /// Loads a playlist from an m3u file, creating empty if file doesn't exist.

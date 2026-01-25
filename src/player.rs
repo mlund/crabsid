@@ -231,10 +231,11 @@ impl Player {
             self.cpu.memory.set_chip_model(self.chip_model);
         }
 
-        self.cpu
-            .memory
-            .sid
-            .set_sampling_parameters(SamplingMethod::Fast, self.clock_hz, self.sample_rate);
+        self.cpu.memory.sid.set_sampling_parameters(
+            SamplingMethod::Fast,
+            self.clock_hz,
+            self.sample_rate,
+        );
 
         self.load_song(song);
     }

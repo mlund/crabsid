@@ -1,8 +1,8 @@
-# Crabsid
+# CrabSID
 
-A command-line SID music player for .sid files from the [High Voltage SID Collection](https://hvsc.c64.org/).
+A TUI and command-line SID music player for .sid files from the [High Voltage SID Collection](https://hvsc.c64.org/).
 
-Emulates the MOS 6502 CPU and MOS 6581/8580 SID chip to play Commodore 64 music.
+Emulates the MOS 6502 CPU and MOS 6581/8580 SID chip using ReSid to play Commodore 64 music.
 
 ## Features
 
@@ -10,15 +10,21 @@ Emulates the MOS 6502 CPU and MOS 6581/8580 SID chip to play Commodore 64 music.
 - Supports both MOS 6581 and MOS 8580 SID chip emulation
 - PAL and NTSC timing detection from file headers
 - Multi-song files with prev/next navigation
+- **HVSC Browser** - Browse and stream directly from the High Voltage SID Collection
+- **HVSC Search** - Search across 50,000+ SID files by path, title, or artist
+- **Playlist support** - M3U playlists with local files and URLs
 - Terminal UI with:
   - VU meters showing per-voice envelope levels
   - Oscilloscope displaying envelope waveforms for all three voices
   - Real-time chip model switching
+  - C64 color schemes (5 themes)
 - Headless mode for background playback
+- Written entirely in Rust
 
 ## Installation
 
-Requires Rust and ALSA development libraries (Linux):
+Works on Linux, macOS, Windows:
+ALSA development libraries are required on Linux:
 
 ```bash
 # Debian/Ubuntu
@@ -31,37 +37,49 @@ cargo install --path .
 ## Usage
 
 ```bash
-crabsid music.sid                # Play default song
-crabsid music.sid --song 3       # Play song 3
+crabsid                          # Start with HVSC browser
+crabsid music.sid                # Play file and add to playlist
+crabsid music.sid --song 3       # Play subsong 3
 crabsid music.sid --chip 8580    # Force 8580 chip emulation
-crabsid music.sid --no-tui       # Headless mode
+crabsid -l mylist.m3u            # Load playlist
+crabsid --no-tui music.sid       # Headless mode
 ```
 
 ## Keyboard Controls
 
+### Player
 | Key | Action |
 |-----|--------|
 | `Space` | Pause/Resume |
-| `Left` / `p` | Previous song |
-| `Right` / `n` | Next song |
-| `s` | Switch SID chip model |
-| `q` / `Esc` | Quit |
+| `1-9` | Jump to subsong 1-9 |
+| `+/-` | Next/previous subsong |
+| `s` | Switch SID chip (6581/8580) |
+| `c` | Cycle color scheme |
+| `a` | Add current song to playlist |
+
+### Browser
+| Key | Action |
+|-----|--------|
+| `Tab` | Switch between Playlist and HVSC |
+| `Up/Down` | Navigate |
+| `Enter` | Play file / Enter directory |
+| `Left/Backspace` | Go up / Remove from playlist |
+| `/` | Search HVSC (Esc to cancel) |
+
+### General
+| Key | Action |
+|-----|--------|
+| `h/?` | Show help |
+| `q` | Quit |
 
 ## Options
 
 | Option | Description |
 |--------|-------------|
-| `-s, --song <N>` | Song number to play (default: from file) |
+| `-s, --song <N>` | Subsong number to play (default: from file) |
 | `-c, --chip <MODEL>` | SID chip: 6581 or 8580 (default: from file) |
+| `-l, --playlist <FILE>` | Load M3U playlist |
 | `--no-tui` | Disable TUI, simple text output |
-
-## Dependencies
-
-- [mos6502](https://crates.io/crates/mos6502) - 6502 CPU emulation
-- [resid-rs](https://crates.io/crates/resid-rs) - SID chip emulation (reSID port)
-- [tinyaudio](https://crates.io/crates/tinyaudio) - Cross-platform audio output
-- [ratatui](https://crates.io/crates/ratatui) - Terminal UI
-- [clap](https://crates.io/crates/clap) - Command-line parsing
 
 ## License
 
