@@ -12,13 +12,19 @@ use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Style},
+    symbols::Marker,
     text::{Line, Span},
-    widgets::{Bar, BarChart, BarGroup, Block, Borders, Paragraph},
+    widgets::{
+        Bar, BarChart, BarGroup, Block, Borders, Paragraph,
+        canvas::{Canvas, Line as CanvasLine},
+    },
 };
 use std::io::{self, stdout};
 use std::time::{Duration, Instant};
 
 const TARGET_FPS: u64 = 30;
+/// Number of samples to display in oscilloscope (downsampled from player buffer)
+const SCOPE_DISPLAY_SAMPLES: usize = 256;
 
 /// VU meter state with smoothed decay for visual appeal
 pub struct VuMeter {
@@ -65,6 +71,33 @@ impl VuMeter {
     }
 }
 
+/// Oscilloscope waveform buffer
+pub struct Oscilloscope {
+    samples: Vec<f32>,
+}
+
+impl Oscilloscope {
+    pub fn new() -> Self {
+        Self {
+            samples: vec![0.0; SCOPE_DISPLAY_SAMPLES],
+        }
+    }
+
+    /// Downsample from player buffer to display resolution
+    pub fn update(&mut self, raw_samples: &[f32]) {
+        if raw_samples.is_empty() {
+            return;
+        }
+        let step = raw_samples.len() / SCOPE_DISPLAY_SAMPLES;
+        if step == 0 {
+            return;
+        }
+        for (i, sample) in self.samples.iter_mut().enumerate() {
+            *sample = raw_samples.get(i * step).copied().unwrap_or(0.0);
+        }
+    }
+}
+
 pub struct App<'a> {
     player: SharedPlayer,
     sid_file: &'a SidFile,
@@ -72,6 +105,7 @@ pub struct App<'a> {
     total_songs: u16,
     paused: bool,
     vu_meter: VuMeter,
+    oscilloscope: Oscilloscope,
 }
 
 impl<'a> App<'a> {
@@ -83,12 +117,14 @@ impl<'a> App<'a> {
             total_songs: sid_file.songs,
             paused: false,
             vu_meter: VuMeter::new(),
+            oscilloscope: Oscilloscope::new(),
         }
     }
 
     fn update(&mut self) {
         if let Ok(player) = self.player.lock() {
             self.vu_meter.update(player.voice_levels());
+            self.oscilloscope.update(&player.scope_samples());
             self.paused = player.is_paused();
         }
     }
@@ -168,8 +204,13 @@ fn draw(frame: &mut Frame, app: &App) {
     ])
     .areas(frame.area());
 
+    // Split main area: VU meters left, oscilloscope right
+    let [vu_area, scope_area] =
+        Layout::horizontal([Constraint::Length(40), Constraint::Min(30)]).areas(main_area);
+
     draw_header(frame, header_area, app);
-    draw_vu_meters(frame, main_area, app);
+    draw_vu_meters(frame, vu_area, app);
+    draw_oscilloscope(frame, scope_area, app);
     draw_footer(frame, footer_area, app);
 }
 
@@ -246,6 +287,54 @@ fn draw_vu_meters(frame: &mut Frame, area: Rect, app: &App) {
         .direction(ratatui::layout::Direction::Vertical);
 
     frame.render_widget(chart, inner);
+}
+
+fn draw_oscilloscope(frame: &mut Frame, area: Rect, app: &App) {
+    let block = Block::default()
+        .title(" Oscilloscope ")
+        .title_style(Style::default().fg(Color::Cyan))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let samples = &app.oscilloscope.samples;
+    let width = inner.width as f64;
+    let x_scale = width / samples.len() as f64;
+
+    let canvas = Canvas::default()
+        .marker(Marker::Braille)
+        .x_bounds([0.0, width])
+        .y_bounds([-1.0, 1.0])
+        .paint(|ctx| {
+            // Draw center line
+            ctx.draw(&CanvasLine {
+                x1: 0.0,
+                y1: 0.0,
+                x2: width,
+                y2: 0.0,
+                color: Color::DarkGray,
+            });
+
+            // Draw waveform as connected line segments
+            for i in 0..samples.len().saturating_sub(1) {
+                let x1 = i as f64 * x_scale;
+                let x2 = (i + 1) as f64 * x_scale;
+                let y1 = samples[i] as f64;
+                let y2 = samples[i + 1] as f64;
+
+                ctx.draw(&CanvasLine {
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    color: Color::Green,
+                });
+            }
+        });
+
+    frame.render_widget(canvas, inner);
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {

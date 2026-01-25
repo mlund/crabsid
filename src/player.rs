@@ -15,6 +15,9 @@ const NTSC_CLOCK_HZ: u32 = 1022727;
 const PAL_FRAME_CYCLES: u32 = 19656;
 const NTSC_FRAME_CYCLES: u32 = 17045;
 
+/// Ring buffer size for oscilloscope display (~23ms at 44.1kHz)
+const SCOPE_BUFFER_SIZE: usize = 1024;
+
 pub struct Player {
     cpu: CPU<C64Memory, Nmos6502>,
     play_address: u16,
@@ -26,6 +29,9 @@ pub struct Player {
     cycle_accumulator: f64,
     frame_cycle_count: u32,
     paused: bool,
+    /// Ring buffer of recent samples for oscilloscope visualization
+    scope_buffer: Box<[f32; SCOPE_BUFFER_SIZE]>,
+    scope_write_pos: usize,
 }
 
 impl Player {
@@ -89,6 +95,8 @@ impl Player {
             cycle_accumulator: 0.0,
             frame_cycle_count: 0,
             paused: false,
+            scope_buffer: Box::new([0.0; SCOPE_BUFFER_SIZE]),
+            scope_write_pos: 0,
         }
     }
 
@@ -113,8 +121,22 @@ impl Player {
                 self.frame_cycle_count += 1;
             }
 
-            *sample = self.cpu.memory.sid.output() as f32 / 32768.0;
+            let output = self.cpu.memory.sid.output() as f32 / 32768.0;
+            *sample = output;
+
+            // Store in ring buffer for oscilloscope
+            self.scope_buffer[self.scope_write_pos] = output;
+            self.scope_write_pos = (self.scope_write_pos + 1) % SCOPE_BUFFER_SIZE;
         }
+    }
+
+    /// Returns a snapshot of the oscilloscope buffer, ordered oldest to newest
+    pub fn scope_samples(&self) -> Vec<f32> {
+        let mut samples = Vec::with_capacity(SCOPE_BUFFER_SIZE);
+        // Read from write position (oldest) to end, then from start to write position
+        samples.extend_from_slice(&self.scope_buffer[self.scope_write_pos..]);
+        samples.extend_from_slice(&self.scope_buffer[..self.scope_write_pos]);
+        samples
     }
 
     pub fn toggle_pause(&mut self) {
