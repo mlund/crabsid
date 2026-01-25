@@ -17,3 +17,4 @@ tinyaudio = "2.0"
 clap = { version = "4", features = ["derive"] }
 ratatui = "0.30"
 crossterm = "0.29"
+ureq = "3"

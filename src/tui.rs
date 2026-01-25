@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Mikael Lund
 
 use crate::player::SharedPlayer;
+use crate::playlist::Playlist;
 use crate::sid_file::SidFile;
 use crossterm::{
     ExecutableCommand,
@@ -11,11 +12,11 @@ use crossterm::{
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     symbols::Marker,
     text::{Line, Span},
     widgets::{
-        Bar, BarChart, BarGroup, Block, Borders, Paragraph,
+        Bar, BarChart, BarGroup, Block, Borders, List, ListItem, ListState, Paragraph,
         canvas::{Canvas, Line as CanvasLine},
     },
 };
@@ -103,6 +104,44 @@ impl VoiceScopes {
     }
 }
 
+/// Browser state for playlist navigation.
+pub struct Browser {
+    playlist: Playlist,
+    state: ListState,
+    /// Currently loaded SID file (owned since we may load from URLs)
+    current_sid: Option<SidFile>,
+}
+
+impl Browser {
+    fn new(playlist: Playlist) -> Self {
+        let mut state = ListState::default();
+        state.select(Some(0));
+        Self {
+            playlist,
+            state,
+            current_sid: None,
+        }
+    }
+
+    fn selected_index(&self) -> usize {
+        self.state.selected().unwrap_or(0)
+    }
+
+    fn select_next(&mut self) {
+        let len = self.playlist.len();
+        if len == 0 {
+            return;
+        }
+        let i = self.selected_index();
+        self.state.select(Some((i + 1).min(len - 1)));
+    }
+
+    fn select_prev(&mut self) {
+        let i = self.selected_index();
+        self.state.select(Some(i.saturating_sub(1)));
+    }
+}
+
 /// TUI application state holding the player and display data.
 pub struct App<'a> {
     player: SharedPlayer,
@@ -113,6 +152,7 @@ pub struct App<'a> {
     chip_model: ChipModel,
     vu_meter: VuMeter,
     voice_scopes: VoiceScopes,
+    browser: Option<Browser>,
 }
 
 impl<'a> App<'a> {
@@ -131,7 +171,20 @@ impl<'a> App<'a> {
             chip_model,
             vu_meter: VuMeter::new(),
             voice_scopes: VoiceScopes::new(),
+            browser: None,
         }
+    }
+
+    /// Creates the application with a playlist browser.
+    pub fn with_playlist(
+        player: SharedPlayer,
+        sid_file: &'a SidFile,
+        song: u16,
+        playlist: Playlist,
+    ) -> Self {
+        let mut app = Self::new(player, sid_file, song);
+        app.browser = Some(Browser::new(playlist));
+        app
     }
 
     fn update(&mut self) {
@@ -174,15 +227,72 @@ impl<'a> App<'a> {
             self.chip_model = player.chip_model();
         }
     }
+
+    fn browser_next(&mut self) {
+        if let Some(browser) = &mut self.browser {
+            browser.select_next();
+        }
+    }
+
+    fn browser_prev(&mut self) {
+        if let Some(browser) = &mut self.browser {
+            browser.select_prev();
+        }
+    }
+
+    /// Loads the currently selected playlist entry.
+    fn load_selected(&mut self) {
+        let Some(browser) = &mut self.browser else {
+            return;
+        };
+
+        let idx = browser.selected_index();
+        let Some(entry) = browser.playlist.entries.get(idx) else {
+            return;
+        };
+
+        let sid_file = match entry.load() {
+            Ok(f) => f,
+            Err(_) => return, // Silently skip on load error
+        };
+
+        let song = entry.subsong.unwrap_or(sid_file.start_song);
+        self.current_song = song;
+        self.total_songs = sid_file.songs;
+
+        if let Ok(mut player) = self.player.lock() {
+            player.load_sid_file(&sid_file, song);
+            self.chip_model = player.chip_model();
+        }
+
+        browser.current_sid = Some(sid_file);
+    }
+
+    /// Returns the SID file to display metadata from (browser's current or initial).
+    fn display_sid(&self) -> &SidFile {
+        self.browser
+            .as_ref()
+            .and_then(|b| b.current_sid.as_ref())
+            .unwrap_or(self.sid_file)
+    }
 }
 
-/// Runs the TUI in the alternate screen until the user quits.
-pub fn run(player: SharedPlayer, sid_file: &SidFile, song: u16) -> io::Result<()> {
+/// Runs the TUI with an optional playlist browser.
+pub fn run_with_playlist(
+    player: SharedPlayer,
+    sid_file: &SidFile,
+    song: u16,
+    playlist: Option<Playlist>,
+) -> io::Result<()> {
     stdout().execute(EnterAlternateScreen)?;
     enable_raw_mode()?;
 
     let terminal = ratatui::init();
-    let result = run_app(terminal, App::new(player, sid_file, song));
+    let app = match playlist {
+        Some(pl) => App::with_playlist(player, sid_file, song, pl),
+        None => App::new(player, sid_file, song),
+    };
+    let result = run_app(terminal, app);
 
     disable_raw_mode()?;
     stdout().execute(LeaveAlternateScreen)?;
@@ -197,7 +307,7 @@ fn run_app(mut terminal: DefaultTerminal, mut app: App) -> io::Result<()> {
         let frame_start = Instant::now();
 
         app.update();
-        terminal.draw(|frame| draw(frame, &app))?;
+        terminal.draw(|frame| draw(frame, &mut app))?;
 
         // Poll for input with remaining frame time
         let elapsed = frame_start.elapsed();
@@ -213,19 +323,39 @@ fn run_app(mut terminal: DefaultTerminal, mut app: App) -> io::Result<()> {
                 KeyCode::Right | KeyCode::Char('n') => app.next_song(),
                 KeyCode::Left | KeyCode::Char('p') => app.prev_song(),
                 KeyCode::Char('s') => app.switch_chip(),
+                KeyCode::Up | KeyCode::Char('k') => app.browser_prev(),
+                KeyCode::Down | KeyCode::Char('j') => app.browser_next(),
+                KeyCode::Enter => app.load_selected(),
                 _ => {}
             }
         }
     }
 }
 
-fn draw(frame: &mut Frame, app: &App) {
+fn draw(frame: &mut Frame, app: &mut App) {
+    let full_area = frame.area();
+
+    // If browser exists, split horizontally: browser left, player right
+    let (browser_area, player_area) = if app.browser.is_some() {
+        let [left, right] =
+            Layout::horizontal([Constraint::Length(30), Constraint::Min(60)]).areas(full_area);
+        (Some(left), right)
+    } else {
+        (None, full_area)
+    };
+
+    // Draw browser if present
+    if let Some(area) = browser_area {
+        draw_browser(frame, area, app);
+    }
+
+    // Player area layout
     let [header_area, main_area, footer_area] = Layout::vertical([
         Constraint::Length(6),
         Constraint::Min(10),
         Constraint::Length(1),
     ])
-    .areas(frame.area());
+    .areas(player_area);
 
     // Split main area: VU meters left, oscilloscope right
     let [vu_area, scope_area] =
@@ -235,6 +365,44 @@ fn draw(frame: &mut Frame, app: &App) {
     draw_vu_meters(frame, vu_area, app);
     draw_voice_scopes(frame, scope_area, app);
     draw_footer(frame, footer_area, app);
+}
+
+fn draw_browser(frame: &mut Frame, area: Rect, app: &mut App) {
+    let Some(browser) = &mut app.browser else {
+        return;
+    };
+
+    let block = Block::default()
+        .title(" Playlist ")
+        .title_style(Style::default().fg(Color::Cyan).bold())
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray));
+
+    let items: Vec<ListItem> = browser
+        .playlist
+        .entries
+        .iter()
+        .map(|entry| {
+            let style = Style::default().fg(Color::White);
+            let mut name = entry.display_name.clone();
+            if let Some(sub) = entry.subsong {
+                name.push_str(&format!(" @{sub}"));
+            }
+            ListItem::new(name).style(style)
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("> ");
+
+    frame.render_stateful_widget(list, area, &mut browser.state);
 }
 
 fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
@@ -247,23 +415,24 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let sid = app.display_sid();
     let info = vec![
         Line::from(vec![
             Span::styled("Title:    ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&app.sid_file.name, Style::default().fg(Color::White).bold()),
+            Span::styled(&sid.name, Style::default().fg(Color::White).bold()),
         ]),
         Line::from(vec![
             Span::styled("Author:   ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&app.sid_file.author, Style::default().fg(Color::Yellow)),
+            Span::styled(&sid.author, Style::default().fg(Color::Yellow)),
         ]),
         Line::from(vec![
             Span::styled("Released: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&app.sid_file.released, Style::default().fg(Color::Gray)),
+            Span::styled(&sid.released, Style::default().fg(Color::Gray)),
         ]),
         Line::from(vec![
             Span::styled("Song:     ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                format!("{} / {}", app.current_song, app.sid_file.songs),
+                format!("{} / {}", app.current_song, app.total_songs),
                 Style::default().fg(Color::Cyan),
             ),
             Span::styled("  ", Style::default()),
@@ -391,7 +560,7 @@ fn draw_single_scope(frame: &mut Frame, area: Rect, samples: &[f32], title: &str
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let pause_text = if app.paused { "Play" } else { "Pause" };
 
-    let help = Line::from(vec![
+    let mut spans = vec![
         Span::styled(" SPACE", Style::default().fg(Color::Cyan).bold()),
         Span::styled(
             format!(" {pause_text} "),
@@ -405,6 +574,20 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled("\u{2502} ", Style::default().fg(Color::DarkGray)),
         Span::styled("s", Style::default().fg(Color::Cyan).bold()),
         Span::styled(" SID ", Style::default().fg(Color::DarkGray)),
+    ];
+
+    // Add browser keys if playlist is present
+    if app.browser.is_some() {
+        spans.extend([
+            Span::styled("\u{2502} ", Style::default().fg(Color::DarkGray)),
+            Span::styled("\u{2191}\u{2193}", Style::default().fg(Color::Cyan).bold()),
+            Span::styled(" Browse ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Enter", Style::default().fg(Color::Cyan).bold()),
+            Span::styled(" Load ", Style::default().fg(Color::DarkGray)),
+        ]);
+    }
+
+    spans.extend([
         Span::styled("\u{2502} ", Style::default().fg(Color::DarkGray)),
         Span::styled("q", Style::default().fg(Color::Cyan).bold()),
         Span::styled("/", Style::default().fg(Color::DarkGray)),
@@ -412,5 +595,5 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(" Quit", Style::default().fg(Color::DarkGray)),
     ]);
 
-    frame.render_widget(Paragraph::new(help), area);
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }

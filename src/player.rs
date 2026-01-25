@@ -200,6 +200,45 @@ impl Player {
         self.paused
     }
 
+    /// Loads a completely new SID file, replacing the current tune.
+    pub fn load_sid_file(&mut self, sid_file: &SidFile, song: u16) {
+        let is_pal = sid_file.is_pal();
+        self.clock_hz = if is_pal { PAL_CLOCK_HZ } else { NTSC_CLOCK_HZ };
+        self.cycles_per_frame = if is_pal {
+            PAL_FRAME_CYCLES
+        } else {
+            NTSC_FRAME_CYCLES
+        };
+        self.cycles_per_sample = f64::from(self.clock_hz) / f64::from(self.sample_rate);
+
+        self.play_address = sid_file.play_address;
+        self.init_address = sid_file.init_address;
+        self.load_address = sid_file.load_address;
+        self.sid_data = sid_file.data.clone();
+
+        // Update chip model from file
+        let file_wants_8580 = (sid_file.flags >> 4) & 0x03 == 2;
+        let new_model = if file_wants_8580 {
+            ChipModel::Mos8580
+        } else {
+            ChipModel::Mos6581
+        };
+        if !matches!(
+            (&self.chip_model, &new_model),
+            (ChipModel::Mos6581, ChipModel::Mos6581) | (ChipModel::Mos8580, ChipModel::Mos8580)
+        ) {
+            self.chip_model = new_model;
+            self.cpu.memory.set_chip_model(self.chip_model);
+        }
+
+        self.cpu
+            .memory
+            .sid
+            .set_sampling_parameters(SamplingMethod::Fast, self.clock_hz, self.sample_rate);
+
+        self.load_song(song);
+    }
+
     /// Reinitialize for a different song number (1-indexed).
     /// Reloads SID data, resets CPU state, and runs the init routine.
     pub fn load_song(&mut self, song: u16) {

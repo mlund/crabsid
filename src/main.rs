@@ -3,11 +3,13 @@
 
 mod memory;
 mod player;
+mod playlist;
 mod sid_file;
 mod tui;
 
 use clap::Parser;
 use player::create_shared_player;
+use playlist::Playlist;
 use sid_file::SidFile;
 use std::path::PathBuf;
 use tinyaudio::prelude::*;
@@ -19,8 +21,12 @@ const BUFFER_SIZE: usize = 1024;
 #[command(name = "crabsid")]
 #[command(about = "A SID music player for .sid files")]
 struct Args {
-    /// Path to .sid file
-    sid_file: PathBuf,
+    /// Path to .sid file (required unless --playlist is used)
+    sid_file: Option<PathBuf>,
+
+    /// Path to .m3u playlist file
+    #[arg(short = 'l', long)]
+    playlist: Option<PathBuf>,
 
     /// Song number to play (default: start song from file)
     #[arg(short, long)]
@@ -38,8 +44,27 @@ struct Args {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
-    let sid_file = SidFile::load(&args.sid_file)?;
-    let song = args.song.unwrap_or(sid_file.start_song);
+    // Load playlist if specified
+    let playlist = args.playlist.as_ref().map(Playlist::load).transpose()?;
+
+    // Determine initial SID file
+    let sid_file = match (&args.sid_file, &playlist) {
+        (Some(path), _) => SidFile::load(path)?,
+        (None, Some(pl)) if !pl.is_empty() => pl.entries[0].load()?,
+        _ => {
+            eprintln!("Error: Either a SID file or a non-empty playlist is required");
+            std::process::exit(1);
+        }
+    };
+
+    // Use subsong from playlist entry if no explicit song argument
+    let song = args.song.unwrap_or_else(|| {
+        playlist
+            .as_ref()
+            .and_then(|pl| pl.entries.first())
+            .and_then(|e| e.subsong)
+            .unwrap_or(sid_file.start_song)
+    });
 
     let player = create_shared_player(&sid_file, song, SAMPLE_RATE, args.chip);
 
@@ -62,7 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.no_tui {
         run_simple(&sid_file, song)?;
     } else {
-        tui::run(player, &sid_file, song)?;
+        tui::run_with_playlist(player, &sid_file, song, playlist)?;
     }
 
     Ok(())

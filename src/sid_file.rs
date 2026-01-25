@@ -66,7 +66,8 @@ impl SidFile {
         Self::parse(&bytes)
     }
 
-    fn parse(bytes: &[u8]) -> io::Result<Self> {
+    /// Parses PSID/RSID data from a byte slice.
+    pub fn parse(bytes: &[u8]) -> io::Result<Self> {
         if bytes.len() < HEADER_MIN_SIZE {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "File too small"));
         }
