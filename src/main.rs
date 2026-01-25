@@ -52,19 +52,14 @@ fn default_playlist_path() -> PathBuf {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
-    // Determine playlist path and load/create it
+    // Load existing playlist or create new one, then append CLI files as absolute paths
     let playlist_path = args.playlist.clone().unwrap_or_else(default_playlist_path);
-    let playlist = if args.files.is_empty() {
-        // No files given: load existing or create empty default playlist
-        Playlist::load_or_create(&playlist_path)?
-    } else {
-        // Files given: create new playlist with these files
-        let mut pl = Playlist::new();
-        for file in &args.files {
-            pl.add(&file.to_string_lossy(), None);
-        }
-        pl
-    };
+    let mut playlist = Playlist::load_or_create(&playlist_path)?;
+    let mut playlist_modified = false;
+    for file in &args.files {
+        let absolute = file.canonicalize().unwrap_or_else(|_| file.clone());
+        playlist_modified |= playlist.add(&absolute.to_string_lossy(), None);
+    }
 
     // Determine initial SID file to play
     let (sid_file, initial_song) = if !args.files.is_empty() {
@@ -107,7 +102,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         run_simple(&sid_file, initial_song)?;
     } else {
         let focus_hvsc = args.files.is_empty() && playlist.is_empty();
-        tui::run_tui(player, &sid_file, initial_song, playlist, playlist_path, focus_hvsc)?;
+        tui::run_tui(
+            player,
+            &sid_file,
+            initial_song,
+            playlist,
+            playlist_path,
+            focus_hvsc,
+            playlist_modified,
+        )?;
     }
 
     Ok(())

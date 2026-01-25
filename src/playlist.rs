@@ -144,12 +144,24 @@ impl Playlist {
         fs::write(path, content)
     }
 
-    /// Adds an entry to the playlist.
-    pub fn add(&mut self, source: &str, subsong: Option<u16>) {
-        if let Some(entry) = PlaylistEntry::new(source) {
-            let mut entry = entry;
+    /// Returns true if playlist contains an entry with the given source and subsong.
+    pub fn contains(&self, source: &str, subsong: Option<u16>) -> bool {
+        self.entries
+            .iter()
+            .any(|e| e.source == source && e.subsong == subsong)
+    }
+
+    /// Adds an entry to the playlist if not already present. Returns true if added.
+    pub fn add(&mut self, source: &str, subsong: Option<u16>) -> bool {
+        if self.contains(source, subsong) {
+            return false;
+        }
+        if let Some(mut entry) = PlaylistEntry::new(source) {
             entry.subsong = subsong;
             self.entries.push(entry);
+            true
+        } else {
+            false
         }
     }
 

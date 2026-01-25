@@ -7,7 +7,7 @@ use crate::playlist::Playlist;
 use crate::sid_file::SidFile;
 use crossterm::{
     ExecutableCommand,
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{self, Event, KeyCode, KeyEventKind},
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use std::path::PathBuf;
@@ -119,6 +119,7 @@ pub enum Popup {
     None,
     Help,
     Error(String),
+    SaveConfirm,
 }
 
 /// Browser state for playlist navigation.
@@ -174,8 +175,12 @@ pub struct App<'a> {
     browser_focus: BrowserFocus,
     /// Currently loaded SID from browsers (owned for URL loads)
     current_browser_sid: Option<SidFile>,
+    /// Source path/URL of the currently playing SID
+    current_source: Option<String>,
     /// Current popup dialog
     popup: Popup,
+    /// Whether playlist has unsaved changes
+    playlist_modified: bool,
 }
 
 impl<'a> App<'a> {
@@ -187,6 +192,7 @@ impl<'a> App<'a> {
         playlist: Playlist,
         playlist_path: PathBuf,
         focus_hvsc: bool,
+        playlist_modified: bool,
     ) -> Self {
         let chip_model = player
             .lock()
@@ -216,7 +222,9 @@ impl<'a> App<'a> {
             hvsc_browser,
             browser_focus,
             current_browser_sid: None,
+            current_source: None,
             popup: Popup::None,
+            playlist_modified,
         }
     }
 
@@ -302,10 +310,11 @@ impl<'a> App<'a> {
             return;
         };
 
+        let source = entry.source.clone();
         match entry.load() {
             Ok(sid_file) => {
                 let song = entry.subsong.unwrap_or(sid_file.start_song);
-                self.play_sid_file(sid_file, song);
+                self.play_sid_file(sid_file, song, source);
             }
             Err(e) => self.show_error(format!("Load error: {e}")),
         }
@@ -313,31 +322,28 @@ impl<'a> App<'a> {
 
     fn load_hvsc_selected(&mut self) {
         if let Some(entry) = self.hvsc_browser.enter() {
+            let source = entry.url();
             match entry.load() {
                 Ok(sid_file) => {
                     let start_song = sid_file.start_song;
-                    self.play_sid_file(sid_file, start_song);
+                    self.play_sid_file(sid_file, start_song, source);
                 }
                 Err(e) => self.show_error(format!("Load error: {e}")),
             }
         }
     }
 
-    /// Adds selected HVSC entry to playlist.
-    fn add_to_playlist(&mut self) {
-        if self.browser_focus != BrowserFocus::Hvsc {
-            return;
-        }
-        let Some(entry) = self.hvsc_browser.entries.get(self.hvsc_browser.selected) else {
+    /// Adds the currently playing song to the playlist.
+    fn add_current_to_playlist(&mut self) {
+        let Some(source) = &self.current_source else {
             return;
         };
-        if entry.is_dir {
-            return;
-        }
 
-        // Use full URL for HVSC entries
-        self.playlist_browser.playlist.add(&entry.url(), None);
-        self.save_playlist();
+        // Include current subsong
+        let subsong = Some(self.current_song);
+
+        self.playlist_browser.playlist.add(source, subsong);
+        self.playlist_modified = true;
     }
 
     /// Removes selected entry from playlist.
@@ -353,7 +359,7 @@ impl<'a> App<'a> {
         if len > 0 && idx >= len {
             self.playlist_browser.state.select(Some(len - 1));
         }
-        self.save_playlist();
+        self.playlist_modified = true;
     }
 
     fn save_playlist(&self) {
@@ -362,7 +368,7 @@ impl<'a> App<'a> {
         }
     }
 
-    fn play_sid_file(&mut self, sid_file: SidFile, song: u16) {
+    fn play_sid_file(&mut self, sid_file: SidFile, song: u16, source: String) {
         self.current_song = song;
         self.total_songs = sid_file.songs;
 
@@ -372,6 +378,7 @@ impl<'a> App<'a> {
         }
 
         self.current_browser_sid = Some(sid_file);
+        self.current_source = Some(source);
     }
 
     /// Jumps to a specific subsong (1-indexed).
@@ -396,6 +403,16 @@ impl<'a> App<'a> {
         self.popup = Popup::None;
     }
 
+    /// Shows save confirmation if playlist modified, returns true to quit immediately.
+    fn request_quit(&mut self) -> bool {
+        if self.playlist_modified {
+            self.popup = Popup::SaveConfirm;
+            false
+        } else {
+            true
+        }
+    }
+
     /// Returns the SID file to display metadata from.
     fn display_sid(&self) -> &SidFile {
         self.current_browser_sid.as_ref().unwrap_or(self.sid_file)
@@ -410,12 +427,21 @@ pub fn run_tui(
     playlist: Playlist,
     playlist_path: PathBuf,
     focus_hvsc: bool,
+    playlist_modified: bool,
 ) -> io::Result<()> {
     stdout().execute(EnterAlternateScreen)?;
     enable_raw_mode()?;
 
     let terminal = ratatui::init();
-    let app = App::new(player, sid_file, song, playlist, playlist_path, focus_hvsc);
+    let app = App::new(
+        player,
+        sid_file,
+        song,
+        playlist,
+        playlist_path,
+        focus_hvsc,
+        playlist_modified,
+    );
     let result = run_app(terminal, app);
 
     disable_raw_mode()?;
@@ -440,16 +466,31 @@ fn run_app(mut terminal: DefaultTerminal, mut app: App) -> io::Result<()> {
             && let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
         {
-            // Close popup on any key if one is shown
+            // Handle save confirmation popup specially
+            if matches!(app.popup, Popup::SaveConfirm) {
+                match key.code {
+                    KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
+                        app.save_playlist();
+                        return Ok(());
+                    }
+                    KeyCode::Char('n' | 'N') => return Ok(()),
+                    _ => app.close_popup(),
+                }
+                continue;
+            }
+
+            // Close other popups on any key
             if !matches!(app.popup, Popup::None) {
                 app.close_popup();
                 continue;
             }
 
-            let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-
             match key.code {
-                KeyCode::Char('q') => return Ok(()),
+                KeyCode::Char('q') => {
+                    if app.request_quit() {
+                        return Ok(());
+                    }
+                }
                 KeyCode::Esc => app.close_popup(),
                 KeyCode::Char(' ') => app.toggle_pause(),
                 KeyCode::Char('s') => app.switch_chip(),
@@ -465,8 +506,8 @@ fn run_app(mut terminal: DefaultTerminal, mut app: App) -> io::Result<()> {
                 KeyCode::Up | KeyCode::Char('k') => app.browser_prev(),
                 KeyCode::Down | KeyCode::Char('j') => app.browser_next(),
                 KeyCode::Left => app.browser_back(),
-                KeyCode::Enter if shift => app.add_to_playlist(),
                 KeyCode::Enter => app.load_selected(),
+                KeyCode::Char('a') => app.add_current_to_playlist(),
                 KeyCode::Backspace => {
                     if app.browser_focus == BrowserFocus::Playlist {
                         app.remove_from_playlist();
@@ -784,12 +825,32 @@ fn draw_footer(frame: &mut Frame, area: Rect, _app: &App) {
 }
 
 fn draw_popup(frame: &mut Frame, popup: &Popup) {
-    let area = centered_rect(60, 70, frame.area());
-
-    let (title, content) = match popup {
+    let (title, content, small) = match popup {
         Popup::None => return,
-        Popup::Help => (" Help ", help_text()),
-        Popup::Error(msg) => (" Error ", vec![Line::from(msg.as_str())]),
+        Popup::Help => (" Help ", help_text(), false),
+        Popup::Error(msg) => (" Error ", vec![Line::from(msg.as_str())], false),
+        Popup::SaveConfirm => (
+            " Save Playlist? ",
+            vec![
+                Line::from(""),
+                Line::from("  Save changes before quitting?"),
+                Line::from(""),
+                Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled("Y", Style::default().fg(Color::Green).bold()),
+                    Span::raw("/Enter = Save    "),
+                    Span::styled("N", Style::default().fg(Color::Red).bold()),
+                    Span::raw(" = Discard"),
+                ]),
+            ],
+            true,
+        ),
+    };
+
+    let area = if small {
+        centered_rect(35, 20, frame.area())
+    } else {
+        centered_rect(60, 70, frame.area())
     };
 
     frame.render_widget(Clear, area);
@@ -814,6 +875,7 @@ fn help_text() -> Vec<Line<'static>> {
         Line::from("  1-9        Jump to subsong 1-9"),
         Line::from("  +/-        Next/previous subsong"),
         Line::from("  s          Switch SID chip (6581/8580)"),
+        Line::from("  a          Add current song to playlist"),
         Line::from(""),
         Line::from(vec![
             Span::styled("  Playlist", Style::default().fg(Color::Yellow).bold()),
@@ -827,7 +889,6 @@ fn help_text() -> Vec<Line<'static>> {
         ]),
         Line::from("  Up/Down    Navigate"),
         Line::from("  Enter      Enter dir / Play file"),
-        Line::from("  Shift+Enter  Add to playlist"),
         Line::from("  Left/BS    Go to parent directory"),
         Line::from(""),
         Line::from(vec![
