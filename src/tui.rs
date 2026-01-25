@@ -581,6 +581,12 @@ fn draw_playlist_browser(frame: &mut Frame, area: Rect, app: &mut App) {
         })
         .collect();
 
+    // Center the selected item in the visible area
+    let inner_height = area.height.saturating_sub(2) as usize;
+    let selected = app.playlist_browser.selected_index();
+    let offset = selected.saturating_sub(inner_height / 2);
+    *app.playlist_browser.state.offset_mut() = offset;
+
     let list = List::new(items)
         .block(block)
         .highlight_style(
@@ -640,6 +646,12 @@ fn draw_hvsc_browser(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let mut list_state = ListState::default();
     list_state.select(Some(app.hvsc_browser.selected));
+
+    // Center the selected item in the visible area
+    let inner_height = area.height.saturating_sub(2) as usize; // minus borders
+    let selected = app.hvsc_browser.selected;
+    let offset = selected.saturating_sub(inner_height / 2);
+    *list_state.offset_mut() = offset;
 
     let list = List::new(items)
         .block(block)
