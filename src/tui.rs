@@ -646,6 +646,9 @@ fn handle_backspace(app: &mut App) {
 fn draw(frame: &mut Frame, app: &mut App) {
     let full_area = frame.area();
 
+    // Force black background regardless of terminal theme
+    frame.render_widget(Block::default().style(Style::default().bg(c64::BLACK)), full_area);
+
     let [browser_area, player_area] =
         Layout::horizontal([Constraint::Length(32), Constraint::Min(60)]).areas(full_area);
 
@@ -843,20 +846,21 @@ fn sid_info_lines(app: &App) -> Vec<Line<'static>> {
     ]
 }
 
-/// Returns the CrabSid logo with C64 rainbow colors.
+/// Returns the CrabSid logo with fixed C64 rainbow colors.
 fn logo_lines() -> Vec<Line<'static>> {
-    let orange = Style::default().fg(Color::Rgb(255, 136, 0));
-    let c = Style::default().fg(Color::LightRed);
-    let r = Style::default().fg(Color::Rgb(255, 136, 0));
-    let a = Style::default().fg(Color::Yellow);
-    let b = Style::default().fg(Color::LightGreen);
-    let s = Style::default().fg(Color::LightCyan);
-    let i = Style::default().fg(Color::LightBlue);
-    let d = Style::default().fg(Color::LightMagenta);
+    let crab = Style::default().fg(c64::ORANGE);
+    // Rainbow: red -> orange -> yellow -> green -> cyan -> blue -> purple
+    let c = Style::default().fg(c64::LIGHT_RED);
+    let r = Style::default().fg(c64::ORANGE);
+    let a = Style::default().fg(c64::YELLOW);
+    let b = Style::default().fg(c64::GREEN);
+    let s = Style::default().fg(c64::CYAN);
+    let i = Style::default().fg(c64::LIGHT_BLUE);
+    let d = Style::default().fg(c64::PURPLE);
 
     vec![
         Line::from(vec![
-            Span::styled(" (\\/)  ", orange),
+            Span::styled(" (\\/)  ", crab),
             Span::styled("╔═╗ ", c),
             Span::styled("╦═╗ ", r),
             Span::styled("╔═╗ ", a),
@@ -866,7 +870,7 @@ fn logo_lines() -> Vec<Line<'static>> {
             Span::styled("╔╦╗", d),
         ]),
         Line::from(vec![
-            Span::styled("( °°)  ", orange),
+            Span::styled("( °°)  ", crab),
             Span::styled("║   ", c),
             Span::styled("╠╦╝ ", r),
             Span::styled("╠═╣ ", a),
@@ -876,7 +880,7 @@ fn logo_lines() -> Vec<Line<'static>> {
             Span::styled(" ║║", d),
         ]),
         Line::from(vec![
-            Span::styled(" /||\\  ", orange),
+            Span::styled(" /||\\  ", crab),
             Span::styled("╚═╝ ", c),
             Span::styled("╩╚═ ", r),
             Span::styled("╩ ╩ ", a),
