@@ -48,9 +48,10 @@ struct Args {
 }
 
 fn default_playlist_path() -> PathBuf {
-    dirs::home_dir()
+    dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".crabsid.m3u")
+        .join("crabsid")
+        .join("playlist.m3u")
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
