@@ -19,6 +19,7 @@ use ratatui::{
         canvas::{Canvas, Line as CanvasLine},
     },
 };
+use resid::ChipModel;
 use std::io::{self, stdout};
 use std::time::{Duration, Instant};
 
@@ -106,18 +107,24 @@ pub struct App<'a> {
     current_song: u16,
     total_songs: u16,
     paused: bool,
+    chip_model: ChipModel,
     vu_meter: VuMeter,
     voice_scopes: VoiceScopes,
 }
 
 impl<'a> App<'a> {
     pub fn new(player: SharedPlayer, sid_file: &'a SidFile, song: u16) -> Self {
+        let chip_model = player
+            .lock()
+            .map(|p| p.chip_model())
+            .unwrap_or(ChipModel::Mos6581);
         Self {
             player,
             sid_file,
             current_song: song,
             total_songs: sid_file.songs,
             paused: false,
+            chip_model,
             vu_meter: VuMeter::new(),
             voice_scopes: VoiceScopes::new(),
         }
@@ -128,6 +135,7 @@ impl<'a> App<'a> {
             self.vu_meter.update(player.voice_levels());
             self.voice_scopes.update(&player.envelope_samples());
             self.paused = player.is_paused();
+            self.chip_model = player.chip_model();
         }
     }
 
@@ -153,6 +161,13 @@ impl<'a> App<'a> {
             if let Ok(mut player) = self.player.lock() {
                 player.load_song(self.current_song);
             }
+        }
+    }
+
+    fn switch_chip(&mut self) {
+        if let Ok(mut player) = self.player.lock() {
+            player.switch_chip_model();
+            self.chip_model = player.chip_model();
         }
     }
 }
@@ -192,6 +207,7 @@ fn run_app(mut terminal: DefaultTerminal, mut app: App) -> io::Result<()> {
                 KeyCode::Char(' ') => app.toggle_pause(),
                 KeyCode::Right | KeyCode::Char('n') => app.next_song(),
                 KeyCode::Left | KeyCode::Char('p') => app.prev_song(),
+                KeyCode::Char('s') => app.switch_chip(),
                 _ => {}
             }
         }
@@ -244,6 +260,14 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
             Span::styled(
                 format!("{} / {}", app.current_song, app.sid_file.songs),
                 Style::default().fg(Color::Cyan),
+            ),
+            Span::styled("  ", Style::default()),
+            Span::styled(
+                match app.chip_model {
+                    ChipModel::Mos6581 => "[6581]",
+                    ChipModel::Mos8580 => "[8580]",
+                },
+                Style::default().fg(Color::Magenta),
             ),
             if app.paused {
                 Span::styled("  [PAUSED]", Style::default().fg(Color::Yellow).bold())
@@ -373,6 +397,9 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(" Prev ", Style::default().fg(Color::DarkGray)),
         Span::styled("\u{2192}/n", Style::default().fg(Color::Cyan).bold()),
         Span::styled(" Next ", Style::default().fg(Color::DarkGray)),
+        Span::styled("\u{2502} ", Style::default().fg(Color::DarkGray)),
+        Span::styled("s", Style::default().fg(Color::Cyan).bold()),
+        Span::styled(" SID ", Style::default().fg(Color::DarkGray)),
         Span::styled("\u{2502} ", Style::default().fg(Color::DarkGray)),
         Span::styled("q", Style::default().fg(Color::Cyan).bold()),
         Span::styled("/", Style::default().fg(Color::DarkGray)),

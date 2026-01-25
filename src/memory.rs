@@ -26,6 +26,11 @@ impl C64Memory {
         let end = (start + data.len()).min(RAM_SIZE);
         self.ram[start..end].copy_from_slice(&data[..end - start]);
     }
+
+    /// Replace the SID chip with a new instance of the specified model
+    pub fn set_chip_model(&mut self, chip_model: ChipModel) {
+        self.sid = Sid::new(chip_model);
+    }
 }
 
 impl Bus for C64Memory {

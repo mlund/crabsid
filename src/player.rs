@@ -35,6 +35,9 @@ pub struct Player {
     envelope_history: [Box<[f32; SCOPE_BUFFER_SIZE]>; 3],
     envelope_write_pos: usize,
     envelope_sample_counter: usize,
+    chip_model: ChipModel,
+    clock_hz: u32,
+    sample_rate: u32,
 }
 
 impl Player {
@@ -107,6 +110,9 @@ impl Player {
             ],
             envelope_write_pos: 0,
             envelope_sample_counter: 0,
+            chip_model,
+            clock_hz,
+            sample_rate,
         }
     }
 
@@ -204,6 +210,34 @@ impl Player {
     pub fn voice_levels(&self) -> [u8; 3] {
         let state = self.cpu.memory.sid.read_state();
         state.envelope_counter
+    }
+
+    pub const fn chip_model(&self) -> ChipModel {
+        self.chip_model
+    }
+
+    /// Toggle between MOS 6581 and MOS 8580 chip emulation
+    pub fn switch_chip_model(&mut self) {
+        // Save current register state before replacing the chip
+        let state = self.cpu.memory.sid.read_state();
+
+        self.chip_model = match self.chip_model {
+            ChipModel::Mos6581 => ChipModel::Mos8580,
+            ChipModel::Mos8580 => ChipModel::Mos6581,
+        };
+
+        self.cpu.memory.set_chip_model(self.chip_model);
+        self.cpu.memory.sid.set_sampling_parameters(
+            SamplingMethod::Fast,
+            self.clock_hz,
+            self.sample_rate,
+        );
+
+        // Restore writable registers (0x00-0x18) to maintain playback
+        for (reg, &val) in state.sid_register[..0x19].iter().enumerate() {
+            #[allow(clippy::cast_possible_truncation)]
+            self.cpu.memory.sid.write(reg as u8, val);
+        }
     }
 
     fn call_play(&mut self) {
