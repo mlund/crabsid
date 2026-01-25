@@ -466,77 +466,84 @@ fn run_app(mut terminal: DefaultTerminal, mut app: App) -> io::Result<()> {
             && let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
         {
-            // Handle save confirmation popup specially
-            if matches!(app.popup, Popup::SaveConfirm) {
-                match key.code {
-                    KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
-                        app.save_playlist();
-                        return Ok(());
-                    }
-                    KeyCode::Char('n' | 'N') => return Ok(()),
-                    _ => app.close_popup(),
-                }
-                continue;
-            }
-
-            // Close other popups on any key
-            if !matches!(app.popup, Popup::None) {
-                app.close_popup();
-                continue;
-            }
-
-            match key.code {
-                KeyCode::Char('q') => {
-                    if app.request_quit() {
-                        return Ok(());
-                    }
-                }
-                KeyCode::Esc => app.close_popup(),
-                KeyCode::Char(' ') => app.toggle_pause(),
-                KeyCode::Char('s') => app.switch_chip(),
-                KeyCode::Char('h') | KeyCode::Char('?') => app.show_help(),
-                KeyCode::Tab => app.toggle_browser_focus(),
-
-                // Subsong selection
-                KeyCode::Char(c @ '1'..='9') => app.goto_song(c.to_digit(10).unwrap() as u16),
-                KeyCode::Char('+') | KeyCode::Char('n') => app.next_song(),
-                KeyCode::Char('-') | KeyCode::Char('p') => app.prev_song(),
-
-                // Browser navigation
-                KeyCode::Up | KeyCode::Char('k') => app.browser_prev(),
-                KeyCode::Down | KeyCode::Char('j') => app.browser_next(),
-                KeyCode::Left => app.browser_back(),
-                KeyCode::Enter => app.load_selected(),
-                KeyCode::Char('a') => app.add_current_to_playlist(),
-                KeyCode::Backspace => {
-                    if app.browser_focus == BrowserFocus::Playlist {
-                        app.remove_from_playlist();
-                    } else {
-                        app.browser_back();
-                    }
-                }
-
-                _ => {}
+            if let Some(action) = handle_key(&mut app, key.code) {
+                return action;
             }
         }
+    }
+}
+
+/// Processes key input, returning Some to exit the app.
+fn handle_key(app: &mut App, key: KeyCode) -> Option<io::Result<()>> {
+    // Save confirmation needs Y/N before other keys work
+    if matches!(app.popup, Popup::SaveConfirm) {
+        return handle_save_confirm(app, key);
+    }
+
+    // Any key dismisses other popups
+    if !matches!(app.popup, Popup::None) {
+        app.close_popup();
+        return None;
+    }
+
+    match key {
+        KeyCode::Char('q') if app.request_quit() => return Some(Ok(())),
+        KeyCode::Esc => app.close_popup(),
+        KeyCode::Char(' ') => app.toggle_pause(),
+        KeyCode::Char('s') => app.switch_chip(),
+        KeyCode::Char('h' | '?') => app.show_help(),
+        KeyCode::Tab => app.toggle_browser_focus(),
+
+        KeyCode::Char(c @ '1'..='9') => app.goto_song(c.to_digit(10).unwrap() as u16),
+        KeyCode::Char('+' | 'n') => app.next_song(),
+        KeyCode::Char('-' | 'p') => app.prev_song(),
+
+        KeyCode::Up | KeyCode::Char('k') => app.browser_prev(),
+        KeyCode::Down | KeyCode::Char('j') => app.browser_next(),
+        KeyCode::Left => app.browser_back(),
+        KeyCode::Enter => app.load_selected(),
+        KeyCode::Char('a') => app.add_current_to_playlist(),
+        KeyCode::Backspace => handle_backspace(app),
+
+        _ => {}
+    }
+    None
+}
+
+fn handle_save_confirm(app: &mut App, key: KeyCode) -> Option<io::Result<()>> {
+    match key {
+        KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
+            app.save_playlist();
+            Some(Ok(()))
+        }
+        KeyCode::Char('n' | 'N') => Some(Ok(())),
+        _ => {
+            app.close_popup();
+            None
+        }
+    }
+}
+
+fn handle_backspace(app: &mut App) {
+    if app.browser_focus == BrowserFocus::Playlist {
+        app.remove_from_playlist();
+    } else {
+        app.browser_back();
     }
 }
 
 fn draw(frame: &mut Frame, app: &mut App) {
     let full_area = frame.area();
 
-    // Browser panel on left, player on right
     let [browser_area, player_area] =
         Layout::horizontal([Constraint::Length(32), Constraint::Min(60)]).areas(full_area);
 
-    // Split browser area: playlist on top, HVSC on bottom
     let [playlist_area, hvsc_area] =
         Layout::vertical([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)]).areas(browser_area);
 
     draw_playlist_browser(frame, playlist_area, app);
     draw_hvsc_browser(frame, hvsc_area, app);
 
-    // Player area layout
     let [header_area, main_area, footer_area] = Layout::vertical([
         Constraint::Length(6),
         Constraint::Min(10),
@@ -544,7 +551,6 @@ fn draw(frame: &mut Frame, app: &mut App) {
     ])
     .areas(player_area);
 
-    // Split main area: VU meters left, oscilloscope right
     let [vu_area, scope_area] =
         Layout::horizontal([Constraint::Length(40), Constraint::Min(30)]).areas(main_area);
 
@@ -552,8 +558,6 @@ fn draw(frame: &mut Frame, app: &mut App) {
     draw_vu_meters(frame, vu_area, app);
     draw_voice_scopes(frame, scope_area, app);
     draw_footer(frame, footer_area, app);
-
-    // Draw popup on top if active
     draw_popup(frame, &app.popup);
 }
 
@@ -676,48 +680,49 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Split inner area: info on left, logo on right
     let [info_area, logo_area] =
         Layout::horizontal([Constraint::Min(40), Constraint::Length(32)]).areas(inner);
 
-    let sid = app.display_sid();
-    let info = vec![
-        Line::from(vec![
-            Span::styled("Title:    ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&sid.name, Style::default().fg(Color::White).bold()),
-        ]),
-        Line::from(vec![
-            Span::styled("Author:   ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&sid.author, Style::default().fg(Color::Yellow)),
-        ]),
-        Line::from(vec![
-            Span::styled("Released: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&sid.released, Style::default().fg(Color::Gray)),
-        ]),
-        Line::from(vec![
-            Span::styled("Song:     ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("{} / {}", app.current_song, app.total_songs),
-                Style::default().fg(Color::Cyan),
-            ),
-            Span::styled("  ", Style::default()),
-            Span::styled(
-                match app.chip_model {
-                    ChipModel::Mos6581 => "[6581]",
-                    ChipModel::Mos8580 => "[8580]",
-                },
-                Style::default().fg(Color::Magenta),
-            ),
-            if app.paused {
-                Span::styled("  [PAUSED]", Style::default().fg(Color::Yellow).bold())
-            } else {
-                Span::styled("  [PLAYING]", Style::default().fg(Color::Green))
-            },
-        ]),
-    ];
-
-    frame.render_widget(Paragraph::new(info), info_area);
+    frame.render_widget(Paragraph::new(sid_info_lines(app)), info_area);
     frame.render_widget(Paragraph::new(logo_lines()), logo_area);
+}
+
+fn sid_info_lines(app: &App) -> Vec<Line<'static>> {
+    let sid = app.display_sid();
+    let label = Style::default().fg(Color::DarkGray);
+
+    let status = if app.paused {
+        Span::styled("  [PAUSED]", Style::default().fg(Color::Yellow).bold())
+    } else {
+        Span::styled("  [PLAYING]", Style::default().fg(Color::Green))
+    };
+
+    let chip = match app.chip_model {
+        ChipModel::Mos6581 => "[6581]",
+        ChipModel::Mos8580 => "[8580]",
+    };
+
+    vec![
+        Line::from(vec![
+            Span::styled("Title:    ", label),
+            Span::styled(sid.name.clone(), Style::default().fg(Color::White).bold()),
+        ]),
+        Line::from(vec![
+            Span::styled("Author:   ", label),
+            Span::styled(sid.author.clone(), Style::default().fg(Color::Yellow)),
+        ]),
+        Line::from(vec![
+            Span::styled("Released: ", label),
+            Span::styled(sid.released.clone(), Style::default().fg(Color::Gray)),
+        ]),
+        Line::from(vec![
+            Span::styled("Song:     ", label),
+            Span::styled(format!("{} / {}", app.current_song, app.total_songs), Style::default().fg(Color::Cyan)),
+            Span::styled("  ", Style::default()),
+            Span::styled(chip, Style::default().fg(Color::Magenta)),
+            status,
+        ]),
+    ]
 }
 
 /// Returns the CrabSid logo with C64 rainbow colors.

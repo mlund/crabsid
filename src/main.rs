@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Mikael Lund
 
+//! CrabSid - A SID music player for Commodore 64 .sid files.
+
+#![deny(missing_docs)]
+
 mod hvsc;
 mod memory;
 mod player;
