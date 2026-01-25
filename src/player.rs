@@ -178,6 +178,9 @@ impl Player {
 
     /// Returns envelope history for each voice, ordered oldest to newest
     pub fn envelope_samples(&self) -> [Vec<f32>; 3] {
+        if self.paused {
+            return std::array::from_fn(|_| vec![0.0; SCOPE_BUFFER_SIZE]);
+        }
         std::array::from_fn(|i| {
             let mut samples = Vec::with_capacity(SCOPE_BUFFER_SIZE);
             samples.extend_from_slice(&self.envelope_history[i][self.envelope_write_pos..]);
@@ -270,6 +273,9 @@ impl Player {
     /// Unlike hardware where only ENV3 ($D41C) is readable, emulation
     /// gives us direct access to all voice envelopes via internal state.
     pub fn voice_levels(&self) -> [u8; 3] {
+        if self.paused {
+            return [0; 3];
+        }
         let state = self.cpu.memory.sid.read_state();
         state.envelope_counter
     }
