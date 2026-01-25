@@ -1,8 +1,8 @@
 # CrabSID
 
-A TUI and command-line SID music player for .sid files from the [High Voltage SID Collection](https://hvsc.c64.org/).
+A TUI and command-line SID music player for C64 SID music playback. Written in Rust and emulates the MOS 6502 CPU and MOS 6581/8580 SID chip using ReSid.
 
-Emulates the MOS 6502 CPU and MOS 6581/8580 SID chip using ReSid to play Commodore 64 music.
+<img width="1063" height="422" alt="Image" src="https://github.com/user-attachments/assets/6dd6817b-a4c2-431a-a481-d107a0ef826d" />
 
 ## Features
 
