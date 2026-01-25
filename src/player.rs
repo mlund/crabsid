@@ -10,10 +10,10 @@ use mos6502::registers::StackPointer;
 use resid::{ChipModel, SamplingMethod};
 use std::sync::{Arc, Mutex};
 
-const PAL_CLOCK_HZ: u32 = 985248;
-const NTSC_CLOCK_HZ: u32 = 1022727;
-const PAL_FRAME_CYCLES: u32 = 19656;
-const NTSC_FRAME_CYCLES: u32 = 17045;
+const PAL_CLOCK_HZ: u32 = 985_248;
+const NTSC_CLOCK_HZ: u32 = 1_022_727;
+const PAL_FRAME_CYCLES: u32 = 19_656;
+const NTSC_FRAME_CYCLES: u32 = 17_045;
 
 /// Ring buffer size for oscilloscope display (~23ms at 44.1kHz)
 const SCOPE_BUFFER_SIZE: usize = 1024;
@@ -54,9 +54,8 @@ impl Player {
 
         let chip_model = match chip_override {
             Some(8580) => ChipModel::Mos8580,
-            Some(_) => ChipModel::Mos6581,
             None if (sid_file.flags >> 4) & 0x03 == 2 => ChipModel::Mos8580,
-            None => ChipModel::Mos6581,
+            Some(_) | None => ChipModel::Mos6581,
         };
 
         let mut memory = C64Memory::new(chip_model);
@@ -77,7 +76,10 @@ impl Player {
         cpu.memory.set_byte(0x01FF, 0xFF);
         cpu.memory.set_byte(0x01FE, 0xFF);
         cpu.registers.stack_pointer = StackPointer(0xFD);
-        cpu.registers.accumulator = song.saturating_sub(1) as u8;
+        // SID files use 1-indexed songs, 6502 accumulator is 0-indexed
+        #[allow(clippy::cast_possible_truncation)]
+        let song_index = song.saturating_sub(1) as u8;
+        cpu.registers.accumulator = song_index;
         cpu.registers.program_counter = sid_file.init_address;
 
         for _ in 0..1_000_000 {
@@ -94,7 +96,7 @@ impl Player {
             load_address: sid_file.load_address,
             sid_data: sid_file.data.clone(),
             cycles_per_frame,
-            cycles_per_sample: clock_hz as f64 / sample_rate as f64,
+            cycles_per_sample: f64::from(clock_hz) / f64::from(sample_rate),
             cycle_accumulator: 0.0,
             frame_cycle_count: 0,
             paused: false,
@@ -116,8 +118,9 @@ impl Player {
 
         for sample in buffer.iter_mut() {
             self.cycle_accumulator += self.cycles_per_sample;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let cycles_to_run = self.cycle_accumulator as u32;
-            self.cycle_accumulator -= cycles_to_run as f64;
+            self.cycle_accumulator -= f64::from(cycles_to_run);
 
             for _ in 0..cycles_to_run {
                 if self.frame_cycle_count >= self.cycles_per_frame {
@@ -129,7 +132,7 @@ impl Player {
                 self.frame_cycle_count += 1;
             }
 
-            *sample = self.cpu.memory.sid.output() as f32 / 32768.0;
+            *sample = f32::from(self.cpu.memory.sid.output()) / 32768.0;
 
             // Store envelope history at reduced rate (envelopes change slower than audio)
             self.envelope_sample_counter += 1;
@@ -137,7 +140,7 @@ impl Player {
                 self.envelope_sample_counter = 0;
                 let state = self.cpu.memory.sid.read_state();
                 for (i, &env) in state.envelope_counter.iter().enumerate() {
-                    self.envelope_history[i][self.envelope_write_pos] = env as f32 / 255.0;
+                    self.envelope_history[i][self.envelope_write_pos] = f32::from(env) / 255.0;
                 }
                 self.envelope_write_pos = (self.envelope_write_pos + 1) % SCOPE_BUFFER_SIZE;
             }
@@ -154,11 +157,11 @@ impl Player {
         })
     }
 
-    pub fn toggle_pause(&mut self) {
+    pub const fn toggle_pause(&mut self) {
         self.paused = !self.paused;
     }
 
-    pub fn is_paused(&self) -> bool {
+    pub const fn is_paused(&self) -> bool {
         self.paused
     }
 
@@ -176,7 +179,9 @@ impl Player {
         self.cpu.memory.set_byte(0x01FF, 0xFF);
         self.cpu.memory.set_byte(0x01FE, 0xFF);
         self.cpu.registers.stack_pointer = StackPointer(0xFD);
-        self.cpu.registers.accumulator = song.saturating_sub(1) as u8;
+        #[allow(clippy::cast_possible_truncation)]
+        let song_index = song.saturating_sub(1) as u8;
+        self.cpu.registers.accumulator = song_index;
         self.cpu.registers.program_counter = self.init_address;
 
         // Run init routine

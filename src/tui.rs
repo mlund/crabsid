@@ -51,11 +51,11 @@ impl VuMeter {
 
         let now = Instant::now();
         for (i, &env) in envelope.iter().enumerate() {
-            let target = env as f32 / 255.0;
+            let target = f32::from(env) / 255.0;
 
             // Fast attack, slow decay for classic VU behavior
             self.levels[i] = if target > self.levels[i] {
-                self.levels[i] + (target - self.levels[i]) * ATTACK_RATE
+                (target - self.levels[i]).mul_add(ATTACK_RATE, self.levels[i])
             } else {
                 self.levels[i] * DECAY_RATE
             };
@@ -85,7 +85,7 @@ impl VoiceScopes {
 
     /// Downsample from player envelope buffers to display resolution
     pub fn update(&mut self, raw_samples: &[Vec<f32>; 3]) {
-        for (voice, (display, raw)) in self.samples.iter_mut().zip(raw_samples.iter()).enumerate() {
+        for (display, raw) in self.samples.iter_mut().zip(raw_samples.iter()) {
             if raw.is_empty() {
                 continue;
             }
@@ -96,7 +96,6 @@ impl VoiceScopes {
             for (i, sample) in display.iter_mut().enumerate() {
                 *sample = raw.get(i * step).copied().unwrap_or(0.0);
             }
-            let _ = voice; // suppress unused warning
         }
     }
 }
@@ -273,6 +272,7 @@ fn draw_vu_meters(frame: &mut Frame, area: Rect, app: &App) {
     // Scale levels to percentage for bar chart
     let bars: Vec<Bar> = (0..3)
         .map(|i| {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let level = (app.vu_meter.levels[i] * 100.0) as u64;
             Bar::default()
                 .value(level)
@@ -315,7 +315,7 @@ fn draw_voice_scopes(frame: &mut Frame, area: Rect, app: &App) {
 
 fn draw_single_scope(frame: &mut Frame, area: Rect, samples: &[f32], title: &str, color: Color) {
     let block = Block::default()
-        .title(format!(" {} ", title))
+        .title(format!(" {title} "))
         .title_style(Style::default().fg(color))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray));
@@ -327,7 +327,9 @@ fn draw_single_scope(frame: &mut Frame, area: Rect, samples: &[f32], title: &str
         return;
     }
 
-    let width = inner.width as f64;
+    let width = f64::from(inner.width);
+    // Precision loss acceptable for display coordinates
+    #[allow(clippy::cast_precision_loss)]
     let x_scale = width / samples.len() as f64;
 
     let canvas = Canvas::default()
@@ -337,10 +339,12 @@ fn draw_single_scope(frame: &mut Frame, area: Rect, samples: &[f32], title: &str
         .paint(|ctx| {
             // Draw waveform as connected line segments
             for i in 0..samples.len().saturating_sub(1) {
+                #[allow(clippy::cast_precision_loss)]
                 let x1 = i as f64 * x_scale;
+                #[allow(clippy::cast_precision_loss)]
                 let x2 = (i + 1) as f64 * x_scale;
-                let y1 = samples[i] as f64;
-                let y2 = samples[i + 1] as f64;
+                let y1 = f64::from(samples[i]);
+                let y2 = f64::from(samples[i + 1]);
 
                 ctx.draw(&CanvasLine {
                     x1,
@@ -361,7 +365,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let help = Line::from(vec![
         Span::styled(" SPACE", Style::default().fg(Color::Cyan).bold()),
         Span::styled(
-            format!(" {} ", pause_text),
+            format!(" {pause_text} "),
             Style::default().fg(Color::DarkGray),
         ),
         Span::styled("\u{2502} ", Style::default().fg(Color::DarkGray)),

@@ -56,7 +56,7 @@ impl SidFile {
         if magic != "PSID" && magic != "RSID" {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Invalid magic: {}", magic),
+                format!("Invalid magic: {magic}"),
             ));
         }
 
@@ -96,7 +96,7 @@ impl SidFile {
             data.drain(..2);
         }
 
-        Ok(SidFile {
+        Ok(Self {
             magic,
             version,
             data_offset,
@@ -114,7 +114,7 @@ impl SidFile {
         })
     }
 
-    pub fn is_pal(&self) -> bool {
+    pub const fn is_pal(&self) -> bool {
         if self.version >= 2 {
             let video_standard = (self.flags >> 2) & 0x03;
             video_standard != 2 // Not NTSC-only
@@ -124,7 +124,7 @@ impl SidFile {
     }
 
     #[allow(dead_code)] // For future CIA timing support
-    pub fn uses_cia_timing(&self, song: u16) -> bool {
+    pub const fn uses_cia_timing(&self, song: u16) -> bool {
         if song == 0 || song > 32 {
             return false;
         }
