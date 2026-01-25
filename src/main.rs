@@ -16,7 +16,7 @@ const SAMPLE_RATE: u32 = 44100;
 const BUFFER_SIZE: usize = 1024;
 
 #[derive(Parser)]
-#[command(name = "rustsid")]
+#[command(name = "crabsid")]
 #[command(about = "A SID music player for .sid files")]
 struct Args {
     /// Path to .sid file

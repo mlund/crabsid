@@ -311,6 +311,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "crabsid"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "crossterm",
+ "mos6502",
+ "ratatui",
+ "resid-rs",
+ "tinyaudio",
+]
+
+[[package]]
 name = "crossterm"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1303,18 +1315,6 @@ dependencies = [
  "libc",
  "linux-raw-sys",
  "windows-sys",
-]
-
-[[package]]
-name = "rustsid"
-version = "0.1.0"
-dependencies = [
- "clap",
- "crossterm",
- "mos6502",
- "ratatui",
- "resid-rs",
- "tinyaudio",
 ]
 
 [[package]]

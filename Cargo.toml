@@ -1,10 +1,13 @@
 [package]
-name = "rustsid"
+name = "crabsid"
 version = "0.1.0"
 edition = "2024"
 authors = ["Mikael Lund"]
 license = "MIT"
 description = "A command-line SID music player"
+repository = "https://github.com/mlund/crabsid"
+keywords = ["sid", "c64", "commodore", "chiptune", "music"]
+categories = ["multimedia::audio", "emulators"]
 
 [dependencies]
 # Using fork with envelope overflow fix (https://github.com/binaryfields/resid-rs/pull/14)
