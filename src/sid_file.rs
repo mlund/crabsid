@@ -168,7 +168,13 @@ fn read_u32_be(bytes: &[u8]) -> u32 {
     u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
 }
 
+/// Reads a null-terminated Latin-1 string (ISO-8859-1, used in SID headers).
 fn read_string(bytes: &[u8]) -> String {
     let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-    String::from_utf8_lossy(&bytes[..end]).trim().to_string()
+    bytes[..end]
+        .iter()
+        .map(|&b| b as char) // Latin-1 maps directly to Unicode code points
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
