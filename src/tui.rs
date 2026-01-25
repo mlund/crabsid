@@ -664,6 +664,10 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    // Split inner area: info on left, logo on right
+    let [info_area, logo_area] =
+        Layout::horizontal([Constraint::Min(40), Constraint::Length(32)]).areas(inner);
+
     let sid = app.display_sid();
     let info = vec![
         Line::from(vec![
@@ -700,7 +704,54 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
         ]),
     ];
 
-    frame.render_widget(Paragraph::new(info), inner);
+    frame.render_widget(Paragraph::new(info), info_area);
+    frame.render_widget(Paragraph::new(logo_lines()), logo_area);
+}
+
+/// Returns the CrabSid logo with C64 rainbow colors.
+fn logo_lines() -> Vec<Line<'static>> {
+    let orange = Style::default().fg(Color::Rgb(255, 136, 0));
+    let c = Style::default().fg(Color::LightRed);
+    let r = Style::default().fg(Color::Rgb(255, 136, 0));
+    let a = Style::default().fg(Color::Yellow);
+    let b = Style::default().fg(Color::LightGreen);
+    let s = Style::default().fg(Color::LightCyan);
+    let i = Style::default().fg(Color::LightBlue);
+    let d = Style::default().fg(Color::LightMagenta);
+
+    vec![
+        Line::from(vec![
+            Span::styled(" (\\/)  ", orange),
+            Span::styled("╔═╗ ", c),
+            Span::styled("╦═╗ ", r),
+            Span::styled("╔═╗ ", a),
+            Span::styled("╔╗  ", b),
+            Span::styled("╔═╗ ", s),
+            Span::styled("╦ ", i),
+            Span::styled("╔╦╗", d),
+        ]),
+        Line::from(vec![
+            Span::styled("( °°)  ", orange),
+            Span::styled("║   ", c),
+            Span::styled("╠╦╝ ", r),
+            Span::styled("╠═╣ ", a),
+            Span::styled("╠╩╗ ", b),
+            Span::styled("╚═╗ ", s),
+            Span::styled("║ ", i),
+            Span::styled(" ║║", d),
+        ]),
+        Line::from(vec![
+            Span::styled(" /||\\  ", orange),
+            Span::styled("╚═╝ ", c),
+            Span::styled("╩╚═ ", r),
+            Span::styled("╩ ╩ ", a),
+            Span::styled("╚═╝ ", b),
+            Span::styled("╚═╝ ", s),
+            Span::styled("╩ ", i),
+            Span::styled("═╩╝", d),
+        ]),
+        Line::from(""),
+    ]
 }
 
 fn draw_vu_meters(frame: &mut Frame, area: Rect, app: &App) {
@@ -816,6 +867,9 @@ fn draw_footer(frame: &mut Frame, area: Rect, _app: &App) {
         Span::styled("\u{2502} ", Style::default().fg(Color::DarkGray)),
         Span::styled("Tab", Style::default().fg(Color::Cyan).bold()),
         Span::styled(" Switch ", Style::default().fg(Color::DarkGray)),
+        Span::styled("\u{2502} ", Style::default().fg(Color::DarkGray)),
+        Span::styled("a", Style::default().fg(Color::Cyan).bold()),
+        Span::styled(" Add ", Style::default().fg(Color::DarkGray)),
         Span::styled("\u{2502} ", Style::default().fg(Color::DarkGray)),
         Span::styled("q", Style::default().fg(Color::Cyan).bold()),
         Span::styled(" Quit", Style::default().fg(Color::DarkGray)),
