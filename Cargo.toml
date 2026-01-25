@@ -7,7 +7,8 @@ license = "MIT"
 description = "A command-line SID music player"
 
 [dependencies]
-resid-rs = "1.1"
+# Using fork with envelope overflow fix (https://github.com/binaryfields/resid-rs/pull/14)
+resid-rs = { git = "https://github.com/sbechet/resid-rs.git", rev = "b57c4ade980ea2641fd2bcf8e5974654204217c1" }
 mos6502 = "0.6"
 tinyaudio = "2.0"
 clap = { version = "4", features = ["derive"] }

@@ -168,10 +168,8 @@ impl Player {
         // Reload the SID data to reset any modified memory
         self.cpu.memory.load(self.load_address, &self.sid_data);
 
-        // Reset SID chip state
-        for reg in 0..0x19 {
-            self.cpu.memory.sid.write(reg, 0);
-        }
+        // Reset all internal SID state (envelope counters, oscillators, filters)
+        self.cpu.memory.sid.reset();
 
         // Set up CPU for init routine
         self.cpu.memory.set_byte(0x0000, 0x60);

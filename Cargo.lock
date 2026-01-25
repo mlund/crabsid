@@ -1272,8 +1272,7 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 [[package]]
 name = "resid-rs"
 version = "1.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4cf0a31213e31d3ecb79e1dadc41ae14a5936f7503361509df19fa2493199ea"
+source = "git+https://github.com/sbechet/resid-rs.git?rev=b57c4ade980ea2641fd2bcf8e5974654204217c1#b57c4ade980ea2641fd2bcf8e5974654204217c1"
 dependencies = [
  "bit_field",
 ]
