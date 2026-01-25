@@ -91,6 +91,20 @@ pub struct Playlist {
 }
 
 impl Playlist {
+    /// Creates an empty playlist.
+    pub fn new() -> Self {
+        Self { entries: Vec::new() }
+    }
+
+    /// Loads a playlist from an m3u file, creating empty if file doesn't exist.
+    pub fn load_or_create<P: AsRef<Path>>(path: P) -> io::Result<Self> {
+        if path.as_ref().exists() {
+            Self::load(path)
+        } else {
+            Ok(Self::new())
+        }
+    }
+
     /// Loads a playlist from an m3u file.
     pub fn load<P: AsRef<Path>>(path: P) -> io::Result<Self> {
         let content = fs::read_to_string(&path)?;
@@ -112,6 +126,38 @@ impl Playlist {
             .collect();
 
         Ok(Self { entries })
+    }
+
+    /// Saves the playlist to an m3u file.
+    pub fn save<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
+        let content: String = self
+            .entries
+            .iter()
+            .map(|e| {
+                if let Some(sub) = e.subsong {
+                    format!("{}@{}\n", e.source, sub)
+                } else {
+                    format!("{}\n", e.source)
+                }
+            })
+            .collect();
+        fs::write(path, content)
+    }
+
+    /// Adds an entry to the playlist.
+    pub fn add(&mut self, source: &str, subsong: Option<u16>) {
+        if let Some(entry) = PlaylistEntry::new(source) {
+            let mut entry = entry;
+            entry.subsong = subsong;
+            self.entries.push(entry);
+        }
+    }
+
+    /// Removes an entry at the given index.
+    pub fn remove(&mut self, index: usize) {
+        if index < self.entries.len() {
+            self.entries.remove(index);
+        }
     }
 
     /// Returns true if the playlist has no entries.

@@ -7,9 +7,10 @@ use crate::playlist::Playlist;
 use crate::sid_file::SidFile;
 use crossterm::{
     ExecutableCommand,
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
+use std::path::PathBuf;
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout, Rect},
@@ -17,7 +18,7 @@ use ratatui::{
     symbols::Marker,
     text::{Line, Span},
     widgets::{
-        Bar, BarChart, BarGroup, Block, Borders, List, ListItem, ListState, Paragraph,
+        Bar, BarChart, BarGroup, Block, Borders, Clear, List, ListItem, ListState, Paragraph,
         canvas::{Canvas, Line as CanvasLine},
     },
 };
@@ -112,6 +113,14 @@ pub enum BrowserFocus {
     Hvsc,
 }
 
+/// Popup dialog state.
+#[derive(Debug, Clone)]
+pub enum Popup {
+    None,
+    Help,
+    Error(String),
+}
+
 /// Browser state for playlist navigation.
 pub struct PlaylistBrowser {
     playlist: Playlist,
@@ -156,26 +165,42 @@ pub struct App<'a> {
     vu_meter: VuMeter,
     voice_scopes: VoiceScopes,
     /// Playlist browser (upper left)
-    playlist_browser: Option<PlaylistBrowser>,
+    playlist_browser: PlaylistBrowser,
+    /// Path to save playlist
+    playlist_path: PathBuf,
     /// HVSC browser (lower left)
     hvsc_browser: HvscBrowser,
     /// Which browser panel has focus
     browser_focus: BrowserFocus,
     /// Currently loaded SID from browsers (owned for URL loads)
     current_browser_sid: Option<SidFile>,
+    /// Current popup dialog
+    popup: Popup,
 }
 
 impl<'a> App<'a> {
-    /// Creates the application with the given player and initial song.
-    pub fn new(player: SharedPlayer, sid_file: &'a SidFile, song: u16) -> Self {
+    /// Creates the application with all components.
+    pub fn new(
+        player: SharedPlayer,
+        sid_file: &'a SidFile,
+        song: u16,
+        playlist: Playlist,
+        playlist_path: PathBuf,
+        focus_hvsc: bool,
+    ) -> Self {
         let chip_model = player
             .lock()
             .map(|p| p.chip_model())
             .unwrap_or(ChipModel::Mos6581);
 
         let mut hvsc_browser = HvscBrowser::new();
-        // Load STIL in the background (blocking for now, could be async)
         hvsc_browser.load_stil();
+
+        let browser_focus = if focus_hvsc {
+            BrowserFocus::Hvsc
+        } else {
+            BrowserFocus::Playlist
+        };
 
         Self {
             player,
@@ -186,24 +211,13 @@ impl<'a> App<'a> {
             chip_model,
             vu_meter: VuMeter::new(),
             voice_scopes: VoiceScopes::new(),
-            playlist_browser: None,
+            playlist_browser: PlaylistBrowser::new(playlist),
+            playlist_path,
             hvsc_browser,
-            browser_focus: BrowserFocus::Hvsc,
+            browser_focus,
             current_browser_sid: None,
+            popup: Popup::None,
         }
-    }
-
-    /// Creates the application with a playlist browser.
-    pub fn with_playlist(
-        player: SharedPlayer,
-        sid_file: &'a SidFile,
-        song: u16,
-        playlist: Playlist,
-    ) -> Self {
-        let mut app = Self::new(player, sid_file, song);
-        app.playlist_browser = Some(PlaylistBrowser::new(playlist));
-        app.browser_focus = BrowserFocus::Playlist;
-        app
     }
 
     fn update(&mut self) {
@@ -249,30 +263,21 @@ impl<'a> App<'a> {
 
     fn toggle_browser_focus(&mut self) {
         self.browser_focus = match self.browser_focus {
-            BrowserFocus::Playlist if self.playlist_browser.is_some() => BrowserFocus::Hvsc,
-            BrowserFocus::Hvsc if self.playlist_browser.is_some() => BrowserFocus::Playlist,
-            _ => self.browser_focus,
+            BrowserFocus::Playlist => BrowserFocus::Hvsc,
+            BrowserFocus::Hvsc => BrowserFocus::Playlist,
         };
     }
 
     fn browser_next(&mut self) {
         match self.browser_focus {
-            BrowserFocus::Playlist => {
-                if let Some(browser) = &mut self.playlist_browser {
-                    browser.select_next();
-                }
-            }
+            BrowserFocus::Playlist => self.playlist_browser.select_next(),
             BrowserFocus::Hvsc => self.hvsc_browser.select_next(),
         }
     }
 
     fn browser_prev(&mut self) {
         match self.browser_focus {
-            BrowserFocus::Playlist => {
-                if let Some(browser) = &mut self.playlist_browser {
-                    browser.select_prev();
-                }
-            }
+            BrowserFocus::Playlist => self.playlist_browser.select_prev(),
             BrowserFocus::Hvsc => self.hvsc_browser.select_prev(),
         }
     }
@@ -292,34 +297,68 @@ impl<'a> App<'a> {
     }
 
     fn load_playlist_selected(&mut self) {
-        let Some(browser) = &self.playlist_browser else {
+        let idx = self.playlist_browser.selected_index();
+        let Some(entry) = self.playlist_browser.playlist.entries.get(idx) else {
             return;
         };
 
-        let idx = browser.selected_index();
-        let Some(entry) = browser.playlist.entries.get(idx) else {
-            return;
-        };
-
-        let sid_file = match entry.load() {
-            Ok(f) => f,
-            Err(_) => return,
-        };
-
-        let song = entry.subsong.unwrap_or(sid_file.start_song);
-        self.play_sid_file(sid_file, song);
+        match entry.load() {
+            Ok(sid_file) => {
+                let song = entry.subsong.unwrap_or(sid_file.start_song);
+                self.play_sid_file(sid_file, song);
+            }
+            Err(e) => self.show_error(format!("Load error: {e}")),
+        }
     }
 
     fn load_hvsc_selected(&mut self) {
-        // Enter directory or load file
         if let Some(entry) = self.hvsc_browser.enter() {
-            // It's a file, load it
-            let sid_file = match entry.load() {
-                Ok(f) => f,
-                Err(_) => return,
-            };
-            let start_song = sid_file.start_song;
-            self.play_sid_file(sid_file, start_song);
+            match entry.load() {
+                Ok(sid_file) => {
+                    let start_song = sid_file.start_song;
+                    self.play_sid_file(sid_file, start_song);
+                }
+                Err(e) => self.show_error(format!("Load error: {e}")),
+            }
+        }
+    }
+
+    /// Adds selected HVSC entry to playlist.
+    fn add_to_playlist(&mut self) {
+        if self.browser_focus != BrowserFocus::Hvsc {
+            return;
+        }
+        let Some(entry) = self.hvsc_browser.entries.get(self.hvsc_browser.selected) else {
+            return;
+        };
+        if entry.is_dir {
+            return;
+        }
+
+        // Use full URL for HVSC entries
+        self.playlist_browser.playlist.add(&entry.url(), None);
+        self.save_playlist();
+    }
+
+    /// Removes selected entry from playlist.
+    fn remove_from_playlist(&mut self) {
+        if self.browser_focus != BrowserFocus::Playlist {
+            return;
+        }
+        let idx = self.playlist_browser.selected_index();
+        self.playlist_browser.playlist.remove(idx);
+
+        // Adjust selection if needed
+        let len = self.playlist_browser.playlist.len();
+        if len > 0 && idx >= len {
+            self.playlist_browser.state.select(Some(len - 1));
+        }
+        self.save_playlist();
+    }
+
+    fn save_playlist(&self) {
+        if let Err(e) = self.playlist_browser.playlist.save(&self.playlist_path) {
+            eprintln!("Failed to save playlist: {e}");
         }
     }
 
@@ -335,27 +374,48 @@ impl<'a> App<'a> {
         self.current_browser_sid = Some(sid_file);
     }
 
+    /// Jumps to a specific subsong (1-indexed).
+    fn goto_song(&mut self, song: u16) {
+        if song >= 1 && song <= self.total_songs {
+            self.current_song = song;
+            if let Ok(mut player) = self.player.lock() {
+                player.load_song(song);
+            }
+        }
+    }
+
+    fn show_help(&mut self) {
+        self.popup = Popup::Help;
+    }
+
+    fn show_error(&mut self, msg: String) {
+        self.popup = Popup::Error(msg);
+    }
+
+    fn close_popup(&mut self) {
+        self.popup = Popup::None;
+    }
+
     /// Returns the SID file to display metadata from.
     fn display_sid(&self) -> &SidFile {
         self.current_browser_sid.as_ref().unwrap_or(self.sid_file)
     }
 }
 
-/// Runs the TUI with an optional playlist browser.
-pub fn run_with_playlist(
+/// Main entry point for the TUI.
+pub fn run_tui(
     player: SharedPlayer,
     sid_file: &SidFile,
     song: u16,
-    playlist: Option<Playlist>,
+    playlist: Playlist,
+    playlist_path: PathBuf,
+    focus_hvsc: bool,
 ) -> io::Result<()> {
     stdout().execute(EnterAlternateScreen)?;
     enable_raw_mode()?;
 
     let terminal = ratatui::init();
-    let app = match playlist {
-        Some(pl) => App::with_playlist(player, sid_file, song, pl),
-        None => App::new(player, sid_file, song),
-    };
+    let app = App::new(player, sid_file, song, playlist, playlist_path, focus_hvsc);
     let result = run_app(terminal, app);
 
     disable_raw_mode()?;
@@ -373,7 +433,6 @@ fn run_app(mut terminal: DefaultTerminal, mut app: App) -> io::Result<()> {
         app.update();
         terminal.draw(|frame| draw(frame, &mut app))?;
 
-        // Poll for input with remaining frame time
         let elapsed = frame_start.elapsed();
         let timeout = frame_duration.saturating_sub(elapsed);
 
@@ -381,17 +440,41 @@ fn run_app(mut terminal: DefaultTerminal, mut app: App) -> io::Result<()> {
             && let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
         {
+            // Close popup on any key if one is shown
+            if !matches!(app.popup, Popup::None) {
+                app.close_popup();
+                continue;
+            }
+
+            let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+
             match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                KeyCode::Char('q') => return Ok(()),
+                KeyCode::Esc => app.close_popup(),
                 KeyCode::Char(' ') => app.toggle_pause(),
-                KeyCode::Right | KeyCode::Char('n') => app.next_song(),
-                KeyCode::Left | KeyCode::Char('p') => app.prev_song(),
                 KeyCode::Char('s') => app.switch_chip(),
+                KeyCode::Char('h') | KeyCode::Char('?') => app.show_help(),
+                KeyCode::Tab => app.toggle_browser_focus(),
+
+                // Subsong selection
+                KeyCode::Char(c @ '1'..='9') => app.goto_song(c.to_digit(10).unwrap() as u16),
+                KeyCode::Char('+') | KeyCode::Char('n') => app.next_song(),
+                KeyCode::Char('-') | KeyCode::Char('p') => app.prev_song(),
+
+                // Browser navigation
                 KeyCode::Up | KeyCode::Char('k') => app.browser_prev(),
                 KeyCode::Down | KeyCode::Char('j') => app.browser_next(),
+                KeyCode::Left => app.browser_back(),
+                KeyCode::Enter if shift => app.add_to_playlist(),
                 KeyCode::Enter => app.load_selected(),
-                KeyCode::Tab => app.toggle_browser_focus(),
-                KeyCode::Backspace | KeyCode::Char('h') => app.browser_back(),
+                KeyCode::Backspace => {
+                    if app.browser_focus == BrowserFocus::Playlist {
+                        app.remove_from_playlist();
+                    } else {
+                        app.browser_back();
+                    }
+                }
+
                 _ => {}
             }
         }
@@ -401,20 +484,16 @@ fn run_app(mut terminal: DefaultTerminal, mut app: App) -> io::Result<()> {
 fn draw(frame: &mut Frame, app: &mut App) {
     let full_area = frame.area();
 
-    // Always show browser panel on left
+    // Browser panel on left, player on right
     let [browser_area, player_area] =
         Layout::horizontal([Constraint::Length(32), Constraint::Min(60)]).areas(full_area);
 
-    // Split browser area: playlist on top (if present), HVSC on bottom
-    if app.playlist_browser.is_some() {
-        let [playlist_area, hvsc_area] =
-            Layout::vertical([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-                .areas(browser_area);
-        draw_playlist_browser(frame, playlist_area, app);
-        draw_hvsc_browser(frame, hvsc_area, app);
-    } else {
-        draw_hvsc_browser(frame, browser_area, app);
-    }
+    // Split browser area: playlist on top, HVSC on bottom
+    let [playlist_area, hvsc_area] =
+        Layout::vertical([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)]).areas(browser_area);
+
+    draw_playlist_browser(frame, playlist_area, app);
+    draw_hvsc_browser(frame, hvsc_area, app);
 
     // Player area layout
     let [header_area, main_area, footer_area] = Layout::vertical([
@@ -432,19 +511,14 @@ fn draw(frame: &mut Frame, app: &mut App) {
     draw_vu_meters(frame, vu_area, app);
     draw_voice_scopes(frame, scope_area, app);
     draw_footer(frame, footer_area, app);
+
+    // Draw popup on top if active
+    draw_popup(frame, &app.popup);
 }
 
 fn draw_playlist_browser(frame: &mut Frame, area: Rect, app: &mut App) {
-    let Some(browser) = &mut app.playlist_browser else {
-        return;
-    };
-
     let is_focused = app.browser_focus == BrowserFocus::Playlist;
-    let border_color = if is_focused {
-        Color::Cyan
-    } else {
-        Color::DarkGray
-    };
+    let border_color = if is_focused { Color::Cyan } else { Color::DarkGray };
 
     let block = Block::default()
         .title(" Playlist ")
@@ -452,7 +526,8 @@ fn draw_playlist_browser(frame: &mut Frame, area: Rect, app: &mut App) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
-    let items: Vec<ListItem> = browser
+    let items: Vec<ListItem> = app
+        .playlist_browser
         .playlist
         .entries
         .iter()
@@ -475,7 +550,7 @@ fn draw_playlist_browser(frame: &mut Frame, area: Rect, app: &mut App) {
         )
         .highlight_symbol(if is_focused { "> " } else { "  " });
 
-    frame.render_stateful_widget(list, area, &mut browser.state);
+    frame.render_stateful_widget(list, area, &mut app.playlist_browser.state);
 }
 
 /// Formats HVSC entry for display, enriching with STIL metadata when available.
@@ -690,45 +765,97 @@ fn draw_single_scope(frame: &mut Frame, area: Rect, samples: &[f32], title: &str
     frame.render_widget(canvas, inner);
 }
 
-fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
-    let pause_text = if app.paused { "Play" } else { "Pause" };
-
-    let mut spans = vec![
-        Span::styled(" SPACE", Style::default().fg(Color::Cyan).bold()),
-        Span::styled(
-            format!(" {pause_text} "),
-            Style::default().fg(Color::DarkGray),
-        ),
+fn draw_footer(frame: &mut Frame, area: Rect, _app: &App) {
+    let spans = vec![
+        Span::styled(" h", Style::default().fg(Color::Cyan).bold()),
+        Span::styled(" Help ", Style::default().fg(Color::DarkGray)),
         Span::styled("\u{2502} ", Style::default().fg(Color::DarkGray)),
-        Span::styled("\u{2190}/p", Style::default().fg(Color::Cyan).bold()),
-        Span::styled(" Prev ", Style::default().fg(Color::DarkGray)),
-        Span::styled("\u{2192}/n", Style::default().fg(Color::Cyan).bold()),
-        Span::styled(" Next ", Style::default().fg(Color::DarkGray)),
+        Span::styled("1-9/+/-", Style::default().fg(Color::Cyan).bold()),
+        Span::styled(" Song ", Style::default().fg(Color::DarkGray)),
         Span::styled("\u{2502} ", Style::default().fg(Color::DarkGray)),
-        Span::styled("s", Style::default().fg(Color::Cyan).bold()),
-        Span::styled(" SID ", Style::default().fg(Color::DarkGray)),
-        Span::styled("\u{2502} ", Style::default().fg(Color::DarkGray)),
-        Span::styled("\u{2191}\u{2193}", Style::default().fg(Color::Cyan).bold()),
-        Span::styled(" Nav ", Style::default().fg(Color::DarkGray)),
-        Span::styled("Enter", Style::default().fg(Color::Cyan).bold()),
-        Span::styled(" Play ", Style::default().fg(Color::DarkGray)),
-        Span::styled("BS", Style::default().fg(Color::Cyan).bold()),
-        Span::styled(" Back ", Style::default().fg(Color::DarkGray)),
-    ];
-
-    // Add Tab key if playlist is present
-    if app.playlist_browser.is_some() {
-        spans.extend([
-            Span::styled("Tab", Style::default().fg(Color::Cyan).bold()),
-            Span::styled(" Switch ", Style::default().fg(Color::DarkGray)),
-        ]);
-    }
-
-    spans.extend([
+        Span::styled("Tab", Style::default().fg(Color::Cyan).bold()),
+        Span::styled(" Switch ", Style::default().fg(Color::DarkGray)),
         Span::styled("\u{2502} ", Style::default().fg(Color::DarkGray)),
         Span::styled("q", Style::default().fg(Color::Cyan).bold()),
         Span::styled(" Quit", Style::default().fg(Color::DarkGray)),
-    ]);
+    ];
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn draw_popup(frame: &mut Frame, popup: &Popup) {
+    let area = centered_rect(60, 70, frame.area());
+
+    let (title, content) = match popup {
+        Popup::None => return,
+        Popup::Help => (" Help ", help_text()),
+        Popup::Error(msg) => (" Error ", vec![Line::from(msg.as_str())]),
+    };
+
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(title)
+        .title_style(Style::default().fg(Color::Yellow).bold())
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let para = Paragraph::new(content).block(block);
+    frame.render_widget(para, area);
+}
+
+fn help_text() -> Vec<Line<'static>> {
+    vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Player", Style::default().fg(Color::Yellow).bold()),
+        ]),
+        Line::from("  SPACE      Toggle play/pause"),
+        Line::from("  1-9        Jump to subsong 1-9"),
+        Line::from("  +/-        Next/previous subsong"),
+        Line::from("  s          Switch SID chip (6581/8580)"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Playlist", Style::default().fg(Color::Yellow).bold()),
+        ]),
+        Line::from("  Up/Down    Navigate"),
+        Line::from("  Enter      Play selected"),
+        Line::from("  Backspace  Remove from playlist"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  HVSC Browser", Style::default().fg(Color::Yellow).bold()),
+        ]),
+        Line::from("  Up/Down    Navigate"),
+        Line::from("  Enter      Enter dir / Play file"),
+        Line::from("  Shift+Enter  Add to playlist"),
+        Line::from("  Left/BS    Go to parent directory"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  General", Style::default().fg(Color::Yellow).bold()),
+        ]),
+        Line::from("  Tab        Switch playlist/HVSC"),
+        Line::from("  h/?        Show this help"),
+        Line::from("  q          Quit"),
+        Line::from(""),
+        Line::from("  Press any key to close"),
+    ]
+}
+
+/// Creates a centered rectangle for popups.
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let [_, center, _] = Layout::vertical([
+        Constraint::Percentage((100 - percent_y) / 2),
+        Constraint::Percentage(percent_y),
+        Constraint::Percentage((100 - percent_y) / 2),
+    ])
+    .areas(area);
+
+    let [_, center, _] = Layout::horizontal([
+        Constraint::Percentage((100 - percent_x) / 2),
+        Constraint::Percentage(percent_x),
+        Constraint::Percentage((100 - percent_x) / 2),
+    ])
+    .areas(center);
+
+    center
 }

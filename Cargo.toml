@@ -18,3 +18,4 @@ clap = { version = "4", features = ["derive"] }
 ratatui = "0.30"
 crossterm = "0.29"
 ureq = "3"
+dirs = "6"

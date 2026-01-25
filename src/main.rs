@@ -22,8 +22,9 @@ const BUFFER_SIZE: usize = 1024;
 #[command(name = "crabsid")]
 #[command(about = "A SID music player for .sid files")]
 struct Args {
-    /// Path to .sid file (required unless --playlist is used)
-    sid_file: Option<PathBuf>,
+    /// SID file(s) to play or add to playlist
+    #[arg(name = "FILE")]
+    files: Vec<PathBuf>,
 
     /// Path to .m3u playlist file
     #[arg(short = 'l', long)]
@@ -42,32 +43,49 @@ struct Args {
     no_tui: bool,
 }
 
+fn default_playlist_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".crabsid.m3u")
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
-    // Load playlist if specified
-    let playlist = args.playlist.as_ref().map(Playlist::load).transpose()?;
-
-    // Determine initial SID file
-    let sid_file = match (&args.sid_file, &playlist) {
-        (Some(path), _) => SidFile::load(path)?,
-        (None, Some(pl)) if !pl.is_empty() => pl.entries[0].load()?,
-        _ => {
-            eprintln!("Error: Either a SID file or a non-empty playlist is required");
-            std::process::exit(1);
+    // Determine playlist path and load/create it
+    let playlist_path = args.playlist.clone().unwrap_or_else(default_playlist_path);
+    let playlist = if args.files.is_empty() {
+        // No files given: load existing or create empty default playlist
+        Playlist::load_or_create(&playlist_path)?
+    } else {
+        // Files given: create new playlist with these files
+        let mut pl = Playlist::new();
+        for file in &args.files {
+            pl.add(&file.to_string_lossy(), None);
         }
+        pl
     };
 
-    // Use subsong from playlist entry if no explicit song argument
-    let song = args.song.unwrap_or_else(|| {
-        playlist
-            .as_ref()
-            .and_then(|pl| pl.entries.first())
-            .and_then(|e| e.subsong)
-            .unwrap_or(sid_file.start_song)
-    });
+    // Determine initial SID file to play
+    let (sid_file, initial_song) = if !args.files.is_empty() {
+        // Play first file from CLI
+        let sid = SidFile::load(&args.files[0])?;
+        let song = args.song.unwrap_or(sid.start_song);
+        (sid, song)
+    } else if !playlist.is_empty() {
+        // Play first from playlist
+        let entry = &playlist.entries[0];
+        let sid = entry.load()?;
+        let song = args.song.or(entry.subsong).unwrap_or(sid.start_song);
+        (sid, song)
+    } else {
+        // Empty playlist, no files - need a dummy SID for player init
+        // TUI will start with HVSC browser focused
+        let dummy = create_silent_sid();
+        (dummy, 1)
+    };
 
-    let player = create_shared_player(&sid_file, song, SAMPLE_RATE, args.chip);
+    let player = create_shared_player(&sid_file, initial_song, SAMPLE_RATE, args.chip);
 
     let params = OutputDeviceParameters {
         channels_count: 1,
@@ -86,12 +104,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     if args.no_tui {
-        run_simple(&sid_file, song)?;
+        run_simple(&sid_file, initial_song)?;
     } else {
-        tui::run_with_playlist(player, &sid_file, song, playlist)?;
+        let focus_hvsc = args.files.is_empty() && playlist.is_empty();
+        tui::run_tui(player, &sid_file, initial_song, playlist, playlist_path, focus_hvsc)?;
     }
 
     Ok(())
+}
+
+/// Creates a minimal silent SID for when no file is loaded.
+fn create_silent_sid() -> SidFile {
+    SidFile {
+        magic: "PSID".to_string(),
+        version: 2,
+        data_offset: 0x7c,
+        load_address: 0x1000,
+        init_address: 0x1000,
+        play_address: 0x1003,
+        songs: 1,
+        start_song: 1,
+        speed: 0,
+        name: String::new(),
+        author: String::new(),
+        released: String::new(),
+        flags: 0,
+        data: vec![0x60, 0x60, 0x60], // RTS instructions
+    }
 }
 
 fn run_simple(sid_file: &SidFile, song: u16) -> Result<(), Box<dyn std::error::Error>> {
