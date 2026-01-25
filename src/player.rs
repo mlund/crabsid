@@ -18,10 +18,14 @@ const NTSC_FRAME_CYCLES: u32 = 17045;
 pub struct Player {
     cpu: CPU<C64Memory, Nmos6502>,
     play_address: u16,
+    init_address: u16,
+    load_address: u16,
+    sid_data: Vec<u8>,
     cycles_per_frame: u32,
     cycles_per_sample: f64,
     cycle_accumulator: f64,
     frame_cycle_count: u32,
+    paused: bool,
 }
 
 impl Player {
@@ -77,14 +81,23 @@ impl Player {
         Self {
             cpu,
             play_address: sid_file.play_address,
+            init_address: sid_file.init_address,
+            load_address: sid_file.load_address,
+            sid_data: sid_file.data.clone(),
             cycles_per_frame,
             cycles_per_sample: clock_hz as f64 / sample_rate as f64,
             cycle_accumulator: 0.0,
             frame_cycle_count: 0,
+            paused: false,
         }
     }
 
     pub fn fill_buffer(&mut self, buffer: &mut [f32]) {
+        if self.paused {
+            buffer.fill(0.0);
+            return;
+        }
+
         for sample in buffer.iter_mut() {
             self.cycle_accumulator += self.cycles_per_sample;
             let cycles_to_run = self.cycle_accumulator as u32;
@@ -102,6 +115,55 @@ impl Player {
 
             *sample = self.cpu.memory.sid.output() as f32 / 32768.0;
         }
+    }
+
+    pub fn toggle_pause(&mut self) {
+        self.paused = !self.paused;
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    /// Reinitialize for a different song number (1-indexed).
+    /// Reloads SID data, resets CPU state, and runs the init routine.
+    pub fn load_song(&mut self, song: u16) {
+        // Reload the SID data to reset any modified memory
+        self.cpu.memory.load(self.load_address, &self.sid_data);
+
+        // Reset SID chip state
+        for reg in 0..0x19 {
+            self.cpu.memory.sid.write(reg, 0);
+        }
+
+        // Set up CPU for init routine
+        self.cpu.memory.set_byte(0x0000, 0x60);
+        self.cpu.memory.set_byte(0x01FF, 0xFF);
+        self.cpu.memory.set_byte(0x01FE, 0xFF);
+        self.cpu.registers.stack_pointer = StackPointer(0xFD);
+        self.cpu.registers.accumulator = song.saturating_sub(1) as u8;
+        self.cpu.registers.program_counter = self.init_address;
+
+        // Run init routine
+        for _ in 0..1_000_000 {
+            if self.cpu.registers.program_counter == 0x0000 {
+                break;
+            }
+            self.cpu.single_step();
+        }
+
+        // Reset playback state
+        self.cycle_accumulator = 0.0;
+        self.frame_cycle_count = 0;
+        self.paused = false;
+    }
+
+    /// Returns envelope levels (0-255) for all three SID voices.
+    /// Unlike hardware where only ENV3 ($D41C) is readable, emulation
+    /// gives us direct access to all voice envelopes via internal state.
+    pub fn voice_levels(&self) -> [u8; 3] {
+        let state = self.cpu.memory.sid.read_state();
+        state.envelope_counter
     }
 
     fn call_play(&mut self) {

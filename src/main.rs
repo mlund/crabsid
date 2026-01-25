@@ -4,6 +4,7 @@
 mod memory;
 mod player;
 mod sid_file;
+mod tui;
 
 use clap::Parser;
 use player::create_shared_player;
@@ -28,20 +29,17 @@ struct Args {
     /// SID chip model: 6581 or 8580 (default: from file)
     #[arg(short, long)]
     chip: Option<u16>,
+
+    /// Disable TUI and use simple text output
+    #[arg(long)]
+    no_tui: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     let sid_file = SidFile::load(&args.sid_file)?;
-
-    println!("Title:    {}", sid_file.name);
-    println!("Author:   {}", sid_file.author);
-    println!("Released: {}", sid_file.released);
-    println!("Songs:    {}", sid_file.songs);
-
     let song = args.song.unwrap_or(sid_file.start_song);
-    println!("Playing song {} of {}", song, sid_file.songs);
 
     let player = create_shared_player(&sid_file, song, SAMPLE_RATE, args.chip);
 
@@ -51,6 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         channel_sample_count: BUFFER_SIZE,
     };
 
+    // Audio callback runs in separate thread
     let _device = run_output_device(params, {
         let player = player.clone();
         move |data| {
@@ -60,9 +59,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     })?;
 
+    if args.no_tui {
+        run_simple(&sid_file, song)?;
+    } else {
+        tui::run(player, &sid_file, song)?;
+    }
+
+    Ok(())
+}
+
+fn run_simple(sid_file: &SidFile, song: u16) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Title:    {}", sid_file.name);
+    println!("Author:   {}", sid_file.author);
+    println!("Released: {}", sid_file.released);
+    println!("Songs:    {}", sid_file.songs);
+    println!("Playing song {} of {}", song, sid_file.songs);
     println!("Press Ctrl+C to stop");
 
-    // Keep the main thread alive
     loop {
         std::thread::sleep(std::time::Duration::from_secs(1));
     }

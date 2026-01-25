@@ -11,3 +11,5 @@ resid-rs = "1.1"
 mos6502 = "0.6"
 tinyaudio = "2.0"
 clap = { version = "4", features = ["derive"] }
+ratatui = "0.30"
+crossterm = "0.29"
