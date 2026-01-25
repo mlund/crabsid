@@ -30,6 +30,105 @@ const TARGET_FPS: u64 = 30;
 /// Number of samples to display in oscilloscope (downsampled from player buffer)
 const SCOPE_DISPLAY_SAMPLES: usize = 256;
 
+/// C64 palette colors.
+#[allow(dead_code)]
+mod c64 {
+    use ratatui::style::Color;
+    pub const BLACK: Color = Color::Rgb(0x00, 0x00, 0x00);
+    pub const WHITE: Color = Color::Rgb(0xFF, 0xFF, 0xFF);
+    pub const RED: Color = Color::Rgb(0x88, 0x00, 0x00);
+    pub const CYAN: Color = Color::Rgb(0xAA, 0xFF, 0xEE);
+    pub const PURPLE: Color = Color::Rgb(0xCC, 0x44, 0xCC);
+    pub const GREEN: Color = Color::Rgb(0x00, 0xCC, 0x55);
+    pub const BLUE: Color = Color::Rgb(0x00, 0x00, 0xAA);
+    pub const YELLOW: Color = Color::Rgb(0xEE, 0xEE, 0x77);
+    pub const ORANGE: Color = Color::Rgb(0xDD, 0x88, 0x55);
+    pub const BROWN: Color = Color::Rgb(0x66, 0x44, 0x00);
+    pub const LIGHT_RED: Color = Color::Rgb(0xFF, 0x77, 0x77);
+    pub const DARK_GREY: Color = Color::Rgb(0x33, 0x33, 0x33);
+    pub const GREY: Color = Color::Rgb(0x77, 0x77, 0x77);
+    pub const LIGHT_GREEN: Color = Color::Rgb(0xAA, 0xFF, 0x66);
+    pub const LIGHT_BLUE: Color = Color::Rgb(0x00, 0x88, 0xFF);
+    pub const LIGHT_GREY: Color = Color::Rgb(0xBB, 0xBB, 0xBB);
+}
+
+/// Complete color scheme for TUI theming.
+#[derive(Clone, Copy)]
+struct ColorScheme {
+    voices: [Color; 3],
+    accent: Color,
+    title: Color,
+    border_focus: Color,
+    border_dim: Color,
+    text_primary: Color,
+    text_secondary: Color,
+    highlight_bg: Color,
+    highlight_fg: Color,
+}
+
+const SCHEMES: &[ColorScheme] = &[
+    // Dark Primary: muted reds, greens, blues
+    ColorScheme {
+        voices: [c64::RED, c64::GREEN, c64::BLUE],
+        accent: c64::CYAN,
+        title: c64::LIGHT_BLUE,
+        border_focus: c64::CYAN,
+        border_dim: c64::DARK_GREY,
+        text_primary: c64::LIGHT_GREY,
+        text_secondary: c64::GREY,
+        highlight_bg: c64::BLUE,
+        highlight_fg: c64::CYAN,
+    },
+    // Warm: browns, oranges, yellows
+    ColorScheme {
+        voices: [c64::ORANGE, c64::YELLOW, c64::BROWN],
+        accent: c64::YELLOW,
+        title: c64::ORANGE,
+        border_focus: c64::YELLOW,
+        border_dim: c64::BROWN,
+        text_primary: c64::LIGHT_GREY,
+        text_secondary: c64::ORANGE,
+        highlight_bg: c64::BROWN,
+        highlight_fg: c64::YELLOW,
+    },
+    // Cool: cyans, blues, purples
+    ColorScheme {
+        voices: [c64::PURPLE, c64::CYAN, c64::LIGHT_BLUE],
+        accent: c64::CYAN,
+        title: c64::PURPLE,
+        border_focus: c64::CYAN,
+        border_dim: c64::BLUE,
+        text_primary: c64::LIGHT_GREY,
+        text_secondary: c64::LIGHT_BLUE,
+        highlight_bg: c64::BLUE,
+        highlight_fg: c64::CYAN,
+    },
+    // Monochrome: greys with green accent
+    ColorScheme {
+        voices: [c64::LIGHT_GREY, c64::GREY, c64::WHITE],
+        accent: c64::GREEN,
+        title: c64::GREEN,
+        border_focus: c64::GREEN,
+        border_dim: c64::DARK_GREY,
+        text_primary: c64::LIGHT_GREY,
+        text_secondary: c64::GREY,
+        highlight_bg: c64::DARK_GREY,
+        highlight_fg: c64::GREEN,
+    },
+    // Neon: bright accents on dark
+    ColorScheme {
+        voices: [c64::LIGHT_RED, c64::LIGHT_GREEN, c64::LIGHT_BLUE],
+        accent: c64::CYAN,
+        title: c64::YELLOW,
+        border_focus: c64::PURPLE,
+        border_dim: c64::DARK_GREY,
+        text_primary: c64::WHITE,
+        text_secondary: c64::LIGHT_GREY,
+        highlight_bg: c64::PURPLE,
+        highlight_fg: c64::CYAN,
+    },
+];
+
 /// VU meter state with smoothed decay for visual appeal
 pub struct VuMeter {
     levels: [f32; 3],
@@ -181,6 +280,8 @@ pub struct App<'a> {
     popup: Popup,
     /// Whether playlist has unsaved changes
     playlist_modified: bool,
+    /// Current voice color scheme index
+    color_scheme: usize,
 }
 
 impl<'a> App<'a> {
@@ -225,7 +326,16 @@ impl<'a> App<'a> {
             current_source: None,
             popup: Popup::None,
             playlist_modified,
+            color_scheme: 0,
         }
+    }
+
+    fn cycle_colors(&mut self) {
+        self.color_scheme = (self.color_scheme + 1) % SCHEMES.len();
+    }
+
+    fn scheme(&self) -> &ColorScheme {
+        &SCHEMES[self.color_scheme]
     }
 
     fn update(&mut self) {
@@ -491,6 +601,7 @@ fn handle_key(app: &mut App, key: KeyCode) -> Option<io::Result<()>> {
         KeyCode::Esc => app.close_popup(),
         KeyCode::Char(' ') => app.toggle_pause(),
         KeyCode::Char('s') => app.switch_chip(),
+        KeyCode::Char('c') => app.cycle_colors(),
         KeyCode::Char('h' | '?') => app.show_help(),
         KeyCode::Tab => app.toggle_browser_focus(),
 
@@ -562,12 +673,13 @@ fn draw(frame: &mut Frame, app: &mut App) {
 }
 
 fn draw_playlist_browser(frame: &mut Frame, area: Rect, app: &mut App) {
+    let scheme = *app.scheme();
     let is_focused = app.browser_focus == BrowserFocus::Playlist;
-    let border_color = if is_focused { Color::Cyan } else { Color::DarkGray };
+    let border_color = if is_focused { scheme.border_focus } else { scheme.border_dim };
 
     let block = Block::default()
         .title(" Playlist ")
-        .title_style(Style::default().fg(Color::Cyan).bold())
+        .title_style(Style::default().fg(scheme.title).bold())
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
@@ -581,11 +693,10 @@ fn draw_playlist_browser(frame: &mut Frame, area: Rect, app: &mut App) {
             if let Some(sub) = entry.subsong {
                 name.push_str(&format!(" @{sub}"));
             }
-            ListItem::new(name).style(Style::default().fg(Color::White))
+            ListItem::new(name).style(Style::default().fg(scheme.text_primary))
         })
         .collect();
 
-    // Center the selected item in the visible area
     let inner_height = area.height.saturating_sub(2) as usize;
     let selected = app.playlist_browser.selected_index();
     let offset = selected.saturating_sub(inner_height / 2);
@@ -595,8 +706,8 @@ fn draw_playlist_browser(frame: &mut Frame, area: Rect, app: &mut App) {
         .block(block)
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
-                .fg(Color::Cyan)
+                .bg(scheme.highlight_bg)
+                .fg(scheme.highlight_fg)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol(if is_focused { "> " } else { "  " });
@@ -605,9 +716,13 @@ fn draw_playlist_browser(frame: &mut Frame, area: Rect, app: &mut App) {
 }
 
 /// Formats HVSC entry for display, enriching with STIL metadata when available.
-fn format_hvsc_entry(entry: &crate::hvsc::HvscEntry, stil: Option<&crate::hvsc::StilDatabase>) -> (String, Style) {
+fn format_hvsc_entry(
+    entry: &crate::hvsc::HvscEntry,
+    stil: Option<&crate::hvsc::StilDatabase>,
+    scheme: &ColorScheme,
+) -> (String, Style) {
     if entry.is_dir {
-        return (format!("{}/", entry.name), Style::default().fg(Color::Yellow));
+        return (format!("{}/", entry.name), Style::default().fg(scheme.accent));
     }
 
     let stil_title = stil
@@ -619,12 +734,13 @@ fn format_hvsc_entry(entry: &crate::hvsc::HvscEntry, stil: Option<&crate::hvsc::
         None => entry.name.clone(),
     };
 
-    (display, Style::default().fg(Color::White))
+    (display, Style::default().fg(scheme.text_primary))
 }
 
 fn draw_hvsc_browser(frame: &mut Frame, area: Rect, app: &mut App) {
+    let scheme = app.scheme();
     let is_focused = app.browser_focus == BrowserFocus::Hvsc;
-    let border_color = if is_focused { Color::Cyan } else { Color::DarkGray };
+    let border_color = if is_focused { scheme.border_focus } else { scheme.border_dim };
 
     let title = if app.hvsc_browser.current_path == "/" {
         " HVSC ".to_string()
@@ -634,7 +750,7 @@ fn draw_hvsc_browser(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let block = Block::default()
         .title(title)
-        .title_style(Style::default().fg(Color::Yellow).bold())
+        .title_style(Style::default().fg(scheme.title).bold())
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
@@ -643,7 +759,7 @@ fn draw_hvsc_browser(frame: &mut Frame, area: Rect, app: &mut App) {
         .entries
         .iter()
         .map(|entry| {
-            let (name, style) = format_hvsc_entry(entry, app.hvsc_browser.stil.as_ref());
+            let (name, style) = format_hvsc_entry(entry, app.hvsc_browser.stil.as_ref(), scheme);
             ListItem::new(name).style(style)
         })
         .collect();
@@ -651,8 +767,7 @@ fn draw_hvsc_browser(frame: &mut Frame, area: Rect, app: &mut App) {
     let mut list_state = ListState::default();
     list_state.select(Some(app.hvsc_browser.selected));
 
-    // Center the selected item in the visible area
-    let inner_height = area.height.saturating_sub(2) as usize; // minus borders
+    let inner_height = area.height.saturating_sub(2) as usize;
     let selected = app.hvsc_browser.selected;
     let offset = selected.saturating_sub(inner_height / 2);
     *list_state.offset_mut() = offset;
@@ -661,8 +776,8 @@ fn draw_hvsc_browser(frame: &mut Frame, area: Rect, app: &mut App) {
         .block(block)
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
-                .fg(Color::Cyan)
+                .bg(scheme.highlight_bg)
+                .fg(scheme.highlight_fg)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol(if is_focused { "> " } else { "  " });
@@ -671,11 +786,13 @@ fn draw_hvsc_browser(frame: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
+    let scheme = app.scheme();
+
     let block = Block::default()
         .title(" SID Player ")
-        .title_style(Style::default().fg(Color::Cyan).bold())
+        .title_style(Style::default().fg(scheme.title).bold())
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(scheme.border_dim));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -688,13 +805,14 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn sid_info_lines(app: &App) -> Vec<Line<'static>> {
+    let scheme = app.scheme();
     let sid = app.display_sid();
-    let label = Style::default().fg(Color::DarkGray);
+    let label = Style::default().fg(scheme.text_secondary);
 
     let status = if app.paused {
-        Span::styled("  [PAUSED]", Style::default().fg(Color::Yellow).bold())
+        Span::styled("  [PAUSED]", Style::default().fg(c64::YELLOW).bold())
     } else {
-        Span::styled("  [PLAYING]", Style::default().fg(Color::Green))
+        Span::styled("  [PLAYING]", Style::default().fg(c64::GREEN))
     };
 
     let chip = match app.chip_model {
@@ -705,21 +823,21 @@ fn sid_info_lines(app: &App) -> Vec<Line<'static>> {
     vec![
         Line::from(vec![
             Span::styled("Title:    ", label),
-            Span::styled(sid.name.clone(), Style::default().fg(Color::White).bold()),
+            Span::styled(sid.name.clone(), Style::default().fg(scheme.text_primary).bold()),
         ]),
         Line::from(vec![
             Span::styled("Author:   ", label),
-            Span::styled(sid.author.clone(), Style::default().fg(Color::Yellow)),
+            Span::styled(sid.author.clone(), Style::default().fg(scheme.accent)),
         ]),
         Line::from(vec![
             Span::styled("Released: ", label),
-            Span::styled(sid.released.clone(), Style::default().fg(Color::Gray)),
+            Span::styled(sid.released.clone(), Style::default().fg(scheme.text_secondary)),
         ]),
         Line::from(vec![
             Span::styled("Song:     ", label),
-            Span::styled(format!("{} / {}", app.current_song, app.total_songs), Style::default().fg(Color::Cyan)),
+            Span::styled(format!("{} / {}", app.current_song, app.total_songs), Style::default().fg(scheme.accent)),
             Span::styled("  ", Style::default()),
-            Span::styled(chip, Style::default().fg(Color::Magenta)),
+            Span::styled(chip, Style::default().fg(c64::PURPLE)),
             status,
         ]),
     ]
@@ -783,19 +901,19 @@ fn logo_lines() -> Vec<Line<'static>> {
 }
 
 fn draw_vu_meters(frame: &mut Frame, area: Rect, app: &App) {
+    let scheme = app.scheme();
+
     let block = Block::default()
         .title(" Voice Levels ")
-        .title_style(Style::default().fg(Color::Cyan))
+        .title_style(Style::default().fg(scheme.title))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(scheme.border_dim));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     let voice_names = ["Voice 1", "Voice 2", "Voice 3"];
-    let colors = [Color::Red, Color::Green, Color::Blue];
 
-    // Scale levels to percentage for bar chart
     let bars: Vec<Bar> = (0..3)
         .map(|i| {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -803,8 +921,8 @@ fn draw_vu_meters(frame: &mut Frame, area: Rect, app: &App) {
             Bar::default()
                 .value(level)
                 .label(Line::from(voice_names[i]))
-                .style(Style::default().fg(colors[i]))
-                .value_style(Style::default().fg(Color::White).bold())
+                .style(Style::default().fg(scheme.voices[i]))
+                .value_style(Style::default().fg(scheme.text_primary).bold())
         })
         .collect();
 
@@ -828,10 +946,9 @@ fn draw_vu_meters(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_voice_scopes(frame: &mut Frame, area: Rect, app: &App) {
+    let scheme = app.scheme();
     let voice_names = ["Voice 1", "Voice 2", "Voice 3"];
-    let colors = [Color::Red, Color::Green, Color::Blue];
 
-    // Split into three equal vertical sections
     let areas = Layout::vertical([
         Constraint::Ratio(1, 3),
         Constraint::Ratio(1, 3),
@@ -839,21 +956,17 @@ fn draw_voice_scopes(frame: &mut Frame, area: Rect, app: &App) {
     ])
     .areas::<3>(area);
 
-    for (i, (&voice_area, (&name, &color))) in areas
-        .iter()
-        .zip(voice_names.iter().zip(colors.iter()))
-        .enumerate()
-    {
-        draw_single_scope(frame, voice_area, &app.voice_scopes.samples[i], name, color);
+    for (i, &voice_area) in areas.iter().enumerate() {
+        draw_single_scope(frame, voice_area, &app.voice_scopes.samples[i], voice_names[i], scheme.voices[i], scheme.border_dim);
     }
 }
 
-fn draw_single_scope(frame: &mut Frame, area: Rect, samples: &[f32], title: &str, color: Color) {
+fn draw_single_scope(frame: &mut Frame, area: Rect, samples: &[f32], title: &str, color: Color, border: Color) {
     let block = Block::default()
         .title(format!(" {title} "))
         .title_style(Style::default().fg(color))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(border));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -894,22 +1007,30 @@ fn draw_single_scope(frame: &mut Frame, area: Rect, samples: &[f32], title: &str
     frame.render_widget(canvas, inner);
 }
 
-fn draw_footer(frame: &mut Frame, area: Rect, _app: &App) {
+fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
+    let scheme = app.scheme();
+    let key = Style::default().fg(scheme.accent).bold();
+    let dim = Style::default().fg(scheme.text_secondary);
+    let sep = Style::default().fg(scheme.border_dim);
+
     let spans = vec![
-        Span::styled(" h", Style::default().fg(Color::Cyan).bold()),
-        Span::styled(" Help ", Style::default().fg(Color::DarkGray)),
-        Span::styled("\u{2502} ", Style::default().fg(Color::DarkGray)),
-        Span::styled("1-9/+/-", Style::default().fg(Color::Cyan).bold()),
-        Span::styled(" Song ", Style::default().fg(Color::DarkGray)),
-        Span::styled("\u{2502} ", Style::default().fg(Color::DarkGray)),
-        Span::styled("Tab", Style::default().fg(Color::Cyan).bold()),
-        Span::styled(" Switch ", Style::default().fg(Color::DarkGray)),
-        Span::styled("\u{2502} ", Style::default().fg(Color::DarkGray)),
-        Span::styled("a", Style::default().fg(Color::Cyan).bold()),
-        Span::styled(" Add ", Style::default().fg(Color::DarkGray)),
-        Span::styled("\u{2502} ", Style::default().fg(Color::DarkGray)),
-        Span::styled("q", Style::default().fg(Color::Cyan).bold()),
-        Span::styled(" Quit", Style::default().fg(Color::DarkGray)),
+        Span::styled(" h", key),
+        Span::styled(" Help ", dim),
+        Span::styled("\u{2502} ", sep),
+        Span::styled("1-9/+/-", key),
+        Span::styled(" Song ", dim),
+        Span::styled("\u{2502} ", sep),
+        Span::styled("Tab", key),
+        Span::styled(" Switch ", dim),
+        Span::styled("\u{2502} ", sep),
+        Span::styled("c", key),
+        Span::styled(" Color ", dim),
+        Span::styled("\u{2502} ", sep),
+        Span::styled("a", key),
+        Span::styled(" Add ", dim),
+        Span::styled("\u{2502} ", sep),
+        Span::styled("q", key),
+        Span::styled(" Quit", dim),
     ];
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
@@ -966,6 +1087,7 @@ fn help_text() -> Vec<Line<'static>> {
         Line::from("  1-9        Jump to subsong 1-9"),
         Line::from("  +/-        Next/previous subsong"),
         Line::from("  s          Switch SID chip (6581/8580)"),
+        Line::from("  c          Cycle voice color scheme"),
         Line::from("  a          Add current song to playlist"),
         Line::from(""),
         Line::from(vec![
