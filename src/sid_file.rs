@@ -158,6 +158,14 @@ impl SidFile {
         }
         (self.speed >> (song - 1)) & 1 != 0
     }
+
+    /// Returns true if the file likely requires full C64 emulation.
+    ///
+    /// RSID files and interrupt-driven tunes need CIA/VIC emulation
+    /// that this player doesn't provide, so they may fail to initialize.
+    pub fn requires_full_emulation(&self) -> bool {
+        self.magic == "RSID" || self.play_address == 0 || self.speed != 0
+    }
 }
 
 fn read_u16_be(bytes: &[u8]) -> u16 {

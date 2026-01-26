@@ -75,7 +75,8 @@ impl fmt::Display for PlayerError {
             Self::InitTimeout { steps, address } => {
                 write!(
                     f,
-                    "SID init routine at ${address:04X} exceeded {steps} steps"
+                    "SID init routine at ${address:04X} exceeded {steps} steps \
+                    (may require CIA/interrupt emulation)"
                 )
             }
             Self::PlayTimeout { steps, address } => {

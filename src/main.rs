@@ -85,7 +85,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (dummy, 1)
     };
 
-    let player = create_shared_player(&sid_file, initial_song, SAMPLE_RATE, args.chip)?;
+    if sid_file.requires_full_emulation() {
+        return Err("Unsupported RSID-like format (requires CIA/interrupt emulation)".into());
+    }
+
+    let player = create_shared_player(&sid_file, initial_song, SAMPLE_RATE, args.chip)
+        .map_err(|e| format!("{e}"))?;
 
     let params = OutputDeviceParameters {
         channels_count: 1,

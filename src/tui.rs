@@ -406,26 +406,33 @@ impl<'a> App<'a> {
     }
 
     fn hvsc_search_select(&mut self) {
-        if let Some(path) = self
-            .hvsc_search_results
-            .get(self.hvsc_search_index)
-            .cloned()
-        {
-            // Load and play directly from search results
+        let start = self.hvsc_search_index;
+        let len = self.hvsc_search_results.len();
+        if len == 0 {
+            return;
+        }
+
+        // Try results starting from selected, skipping failures
+        for offset in 0..len {
+            let idx = (start + offset) % len;
+            let path = &self.hvsc_search_results[idx];
             let entry = HvscEntry {
-                name: path.rsplit('/').next().unwrap_or(&path).to_string(),
+                name: path.rsplit('/').next().unwrap_or(path).to_string(),
                 path: path.clone(),
                 is_dir: false,
             };
             let source = entry.url();
+
             match entry.load() {
                 Ok(sid_file) => {
                     let start_song = sid_file.start_song;
-                    self.play_sid_file(sid_file, start_song, source);
+                    if self.play_sid_file(sid_file, start_song, source) {
+                        self.hvsc_search_index = idx;
+                        return;
+                    }
                 }
-                Err(e) => self.show_error(format!("Load error: {e}")),
+                Err(e) => self.show_error(format!("Skipped: {e}")),
             }
-            // Keep search results visible for further exploration
         }
     }
 
@@ -510,30 +517,75 @@ impl<'a> App<'a> {
     }
 
     fn load_playlist_selected(&mut self) {
-        let idx = self.playlist_browser.selected_index();
-        let Some(entry) = self.playlist_browser.playlist.entries.get(idx) else {
+        let start_idx = self.playlist_browser.selected_index();
+        let len = self.playlist_browser.playlist.len();
+        if len == 0 {
             return;
-        };
+        }
 
-        let source = entry.source.clone();
-        match entry.load() {
-            Ok(sid_file) => {
-                let song = entry.subsong.unwrap_or(sid_file.start_song);
-                self.play_sid_file(sid_file, song, source);
+        // Try entries starting from selected, wrapping around once
+        for offset in 0..len {
+            let idx = (start_idx + offset) % len;
+            let entry = &self.playlist_browser.playlist.entries[idx];
+            let source = entry.source.clone();
+            let subsong = entry.subsong;
+
+            match entry.load() {
+                Ok(sid_file) => {
+                    let song = subsong.unwrap_or(sid_file.start_song);
+                    if self.play_sid_file(sid_file, song, source) {
+                        self.playlist_browser.state.select(Some(idx));
+                        return;
+                    }
+                }
+                Err(e) => self.show_error(format!("Skipped: {e}")),
             }
-            Err(e) => self.show_error(format!("Load error: {e}")),
         }
     }
 
     fn load_hvsc_selected(&mut self) {
-        if let Some(entry) = self.hvsc_browser.enter() {
+        let Some(entry) = self.hvsc_browser.enter() else {
+            return;
+        };
+
+        let source = entry.url();
+        match entry.load() {
+            Ok(sid_file) => {
+                let start_song = sid_file.start_song;
+                if !self.play_sid_file(sid_file, start_song, source) {
+                    self.try_next_hvsc_file();
+                }
+            }
+            Err(e) => {
+                self.show_error(format!("Skipped: {e}"));
+                self.try_next_hvsc_file();
+            }
+        }
+    }
+
+    /// Tries to play the next HVSC file, skipping directories and failures.
+    fn try_next_hvsc_file(&mut self) {
+        let start = self.hvsc_browser.selected;
+        let len = self.hvsc_browser.entries.len();
+
+        for offset in 1..len {
+            let idx = (start + offset) % len;
+            let entry = &self.hvsc_browser.entries[idx];
+
+            if entry.is_dir {
+                continue;
+            }
+
+            self.hvsc_browser.selected = idx;
             let source = entry.url();
             match entry.load() {
                 Ok(sid_file) => {
                     let start_song = sid_file.start_song;
-                    self.play_sid_file(sid_file, start_song, source);
+                    if self.play_sid_file(sid_file, start_song, source) {
+                        return;
+                    }
                 }
-                Err(e) => self.show_error(format!("Load error: {e}")),
+                Err(e) => self.show_error(format!("Skipped: {e}")),
             }
         }
     }
@@ -573,7 +625,14 @@ impl<'a> App<'a> {
         }
     }
 
-    fn play_sid_file(&mut self, sid_file: SidFile, song: u16, source: String) {
+    /// Attempts to play a SID file. Returns true on success, false on failure.
+    fn play_sid_file(&mut self, sid_file: SidFile, song: u16, source: String) -> bool {
+        // Check before attempting emulation
+        if sid_file.requires_full_emulation() {
+            self.show_error("Skipped: Unsupported RSID-like format".to_string());
+            return false;
+        }
+
         self.current_song = song;
         self.total_songs = sid_file.songs;
 
@@ -586,17 +645,20 @@ impl<'a> App<'a> {
                         self.chip_model = chip;
                         None
                     }
-                    Err(e) => Some(format!("Init error: {e}")),
+                    Err(e) => Some(format!("Skipped: {e}")),
                 }
             }
-            Err(_) => Some("Init error: player lock poisoned".to_string()),
+            Err(_) => Some("Skipped: player lock poisoned".to_string()),
         };
+
         if let Some(msg) = error {
             self.show_error(msg);
+            return false;
         }
 
         self.current_browser_sid = Some(sid_file);
         self.current_source = Some(source);
+        true
     }
 
     /// Jumps to a specific subsong (1-indexed).

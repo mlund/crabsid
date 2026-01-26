@@ -6,7 +6,7 @@ A TUI and command-line SID music player for C64 SID music playback. Written in R
 
 ## Features
 
-- Plays PSID and RSID format files
+- Plays PSID format files (RSID/CIA-driven tunes require full C64 emulation)
 - Supports both MOS 6581 and MOS 8580 SID chip emulation
 - PAL and NTSC timing detection from file headers
 - Multi-song files with prev/next navigation
