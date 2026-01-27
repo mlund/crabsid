@@ -52,9 +52,26 @@ mod c64 {
     pub const LIGHT_GREY: Color = Color::Rgb(0xBB, 0xBB, 0xBB);
 }
 
+#[allow(dead_code)]
+mod dracula {
+    use ratatui::style::Color;
+    pub const BACKGROUND: Color = Color::Rgb(0x28, 0x2a, 0x36);
+    pub const FOREGROUND: Color = Color::Rgb(0xf8, 0xf8, 0xf2);
+    pub const COMMENT: Color = Color::Rgb(0x62, 0x72, 0xa4);
+    pub const CYAN: Color = Color::Rgb(0x8b, 0xe9, 0xfd);
+    pub const GREEN: Color = Color::Rgb(0x50, 0xfa, 0x7b);
+    pub const ORANGE: Color = Color::Rgb(0xff, 0xb8, 0x6c);
+    pub const PINK: Color = Color::Rgb(0xff, 0x79, 0xc6);
+    pub const PURPLE: Color = Color::Rgb(0xbd, 0x93, 0xf9);
+    pub const RED: Color = Color::Rgb(0xff, 0x55, 0x55);
+    pub const YELLOW: Color = Color::Rgb(0xf1, 0xfa, 0x8c);
+}
+
 /// Complete color scheme for TUI theming.
 #[derive(Clone, Copy)]
 struct ColorScheme {
+    name: &'static str,
+    background: Color,
     voices: [Color; 3],
     accent: Color,
     title: Color,
@@ -67,8 +84,9 @@ struct ColorScheme {
 }
 
 const SCHEMES: &[ColorScheme] = &[
-    // Dark Primary: muted reds, greens, blues
     ColorScheme {
+        name: "Dark Primary",
+        background: c64::BLACK,
         voices: [c64::RED, c64::GREEN, c64::BLUE],
         accent: c64::CYAN,
         title: c64::LIGHT_BLUE,
@@ -79,8 +97,9 @@ const SCHEMES: &[ColorScheme] = &[
         highlight_bg: c64::BLUE,
         highlight_fg: c64::CYAN,
     },
-    // Warm: browns, oranges, yellows
     ColorScheme {
+        name: "Warm",
+        background: c64::BLACK,
         voices: [c64::ORANGE, c64::YELLOW, c64::BROWN],
         accent: c64::YELLOW,
         title: c64::ORANGE,
@@ -91,8 +110,9 @@ const SCHEMES: &[ColorScheme] = &[
         highlight_bg: c64::BROWN,
         highlight_fg: c64::YELLOW,
     },
-    // Cool: cyans, blues, purples
     ColorScheme {
+        name: "Cool",
+        background: c64::BLACK,
         voices: [c64::PURPLE, c64::CYAN, c64::LIGHT_BLUE],
         accent: c64::CYAN,
         title: c64::PURPLE,
@@ -103,8 +123,9 @@ const SCHEMES: &[ColorScheme] = &[
         highlight_bg: c64::BLUE,
         highlight_fg: c64::CYAN,
     },
-    // Monochrome: greys with green accent
     ColorScheme {
+        name: "Monochrome",
+        background: c64::BLACK,
         voices: [c64::LIGHT_GREY, c64::GREY, c64::WHITE],
         accent: c64::GREEN,
         title: c64::GREEN,
@@ -115,8 +136,9 @@ const SCHEMES: &[ColorScheme] = &[
         highlight_bg: c64::DARK_GREY,
         highlight_fg: c64::GREEN,
     },
-    // Neon: bright accents on dark
     ColorScheme {
+        name: "Neon",
+        background: c64::BLACK,
         voices: [c64::LIGHT_RED, c64::LIGHT_GREEN, c64::LIGHT_BLUE],
         accent: c64::CYAN,
         title: c64::YELLOW,
@@ -127,7 +149,87 @@ const SCHEMES: &[ColorScheme] = &[
         highlight_bg: c64::PURPLE,
         highlight_fg: c64::CYAN,
     },
+    ColorScheme {
+        name: "C64",
+        background: c64::BLUE,
+        voices: [c64::LIGHT_BLUE, c64::CYAN, c64::WHITE],
+        accent: c64::LIGHT_BLUE,
+        title: c64::CYAN,
+        border_focus: c64::LIGHT_BLUE,
+        border_dim: c64::LIGHT_BLUE,
+        text_primary: c64::LIGHT_BLUE,
+        text_secondary: c64::CYAN,
+        highlight_bg: c64::DARK_GREY,
+        highlight_fg: c64::WHITE,
+    },
+    ColorScheme {
+        name: "Frost",
+        background: c64::BLUE,
+        voices: [c64::WHITE, c64::LIGHT_GREY, c64::CYAN],
+        accent: c64::WHITE,
+        title: c64::WHITE,
+        border_focus: c64::LIGHT_GREY,
+        border_dim: c64::CYAN,
+        text_primary: c64::WHITE,
+        text_secondary: c64::LIGHT_GREY,
+        highlight_bg: c64::DARK_GREY,
+        highlight_fg: c64::CYAN,
+    },
+    ColorScheme {
+        name: "VIC-20",
+        background: c64::CYAN,
+        voices: [c64::BLUE, c64::PURPLE, c64::RED],
+        accent: c64::BLUE,
+        title: c64::BLUE,
+        border_focus: c64::BLUE,
+        border_dim: c64::PURPLE,
+        text_primary: c64::BLUE,
+        text_secondary: c64::PURPLE,
+        highlight_bg: c64::BLUE,
+        highlight_fg: c64::CYAN,
+    },
+    ColorScheme {
+        name: "C128",
+        background: c64::DARK_GREY,
+        voices: [c64::LIGHT_GREEN, c64::GREEN, c64::CYAN],
+        accent: c64::LIGHT_GREEN,
+        title: c64::LIGHT_GREEN,
+        border_focus: c64::LIGHT_GREEN,
+        border_dim: c64::GREEN,
+        text_primary: c64::LIGHT_GREEN,
+        text_secondary: c64::GREEN,
+        highlight_bg: c64::GREEN,
+        highlight_fg: c64::DARK_GREY,
+    },
+    ColorScheme {
+        name: "PET",
+        background: c64::BLACK,
+        voices: [c64::GREEN, c64::GREEN, c64::GREEN],
+        accent: c64::GREEN,
+        title: c64::GREEN,
+        border_focus: c64::GREEN,
+        border_dim: c64::DARK_GREY,
+        text_primary: c64::GREEN,
+        text_secondary: c64::GREEN,
+        highlight_bg: c64::GREEN,
+        highlight_fg: c64::BLACK,
+    },
+    ColorScheme {
+        name: "Dracula",
+        background: dracula::BACKGROUND,
+        voices: [dracula::PINK, dracula::CYAN, dracula::GREEN],
+        accent: dracula::PURPLE,
+        title: dracula::PINK,
+        border_focus: dracula::PURPLE,
+        border_dim: dracula::COMMENT,
+        text_primary: dracula::FOREGROUND,
+        text_secondary: dracula::COMMENT,
+        highlight_bg: dracula::COMMENT,
+        highlight_fg: dracula::CYAN,
+    },
 ];
+
+const DEFAULT_SCHEME: usize = 10; // Dracula
 
 /// VU meter state with smoothed decay for visual appeal
 pub struct VuMeter {
@@ -220,6 +322,7 @@ pub enum Popup {
     Error(String),
     SaveConfirm,
     HvscSearch,
+    ColorScheme,
 }
 
 enum KeyHandled {
@@ -339,7 +442,7 @@ impl<'a> App<'a> {
             current_source: None,
             popup: Popup::None,
             playlist_modified,
-            color_scheme: 0,
+            color_scheme: DEFAULT_SCHEME,
             hvsc_search: None,
             hvsc_search_results: Vec::new(),
             hvsc_search_index: 0,
@@ -436,8 +539,19 @@ impl<'a> App<'a> {
         }
     }
 
-    fn cycle_colors(&mut self) {
+    fn open_color_picker(&mut self) {
+        self.popup = Popup::ColorScheme;
+    }
+
+    fn next_color_scheme(&mut self) {
         self.color_scheme = (self.color_scheme + 1) % SCHEMES.len();
+    }
+
+    fn prev_color_scheme(&mut self) {
+        self.color_scheme = self
+            .color_scheme
+            .checked_sub(1)
+            .unwrap_or(SCHEMES.len() - 1);
     }
 
     fn scheme(&self) -> &ColorScheme {
@@ -788,7 +902,7 @@ fn handle_key(app: &mut App, key: KeyCode) -> Option<io::Result<()>> {
         KeyCode::Esc => app.close_popup(),
         KeyCode::Char(' ') => app.toggle_pause(),
         KeyCode::Char('s') => app.switch_chip(),
-        KeyCode::Char('c') => app.cycle_colors(),
+        KeyCode::Char('c') => app.open_color_picker(),
         KeyCode::Char('h' | '?') => app.show_help(),
         KeyCode::Tab => app.toggle_browser_focus(),
         KeyCode::Char('/') => app.start_hvsc_search(),
@@ -838,6 +952,16 @@ fn handle_hvsc_search_results(app: &mut App, key: KeyCode) -> bool {
     true
 }
 
+fn handle_color_scheme_popup(app: &mut App, key: KeyCode) -> Option<io::Result<()>> {
+    match key {
+        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('c') => app.popup = Popup::None,
+        KeyCode::Up | KeyCode::Char('k') => app.prev_color_scheme(),
+        KeyCode::Down | KeyCode::Char('j') => app.next_color_scheme(),
+        _ => {}
+    }
+    None
+}
+
 fn handle_popups(app: &mut App, key: KeyCode) -> KeyHandled {
     match app.popup {
         Popup::HvscSearch => KeyHandled::Consumed(handle_hvsc_search_popup(app, key)),
@@ -846,6 +970,7 @@ fn handle_popups(app: &mut App, key: KeyCode) -> KeyHandled {
             app.close_popup();
             KeyHandled::Consumed(None)
         }
+        Popup::ColorScheme => KeyHandled::Consumed(handle_color_scheme_popup(app, key)),
         Popup::None => KeyHandled::PassThrough,
     }
 }
@@ -874,10 +999,11 @@ fn handle_backspace(app: &mut App) {
 
 fn draw(frame: &mut Frame, app: &mut App) {
     let full_area = frame.area();
+    let scheme = app.scheme();
 
-    // Force black background regardless of terminal theme
+    // Fill background with scheme color
     frame.render_widget(
-        Block::default().style(Style::default().bg(c64::BLACK)),
+        Block::default().style(Style::default().bg(scheme.background)),
         full_area,
     );
 
@@ -1378,10 +1504,48 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
+fn draw_color_scheme_popup(frame: &mut Frame, app: &App) {
+    let scheme = app.scheme();
+    let area = centered_rect(25, 50, frame.area());
+
+    frame.render_widget(Clear, area);
+
+    let items: Vec<ListItem> = SCHEMES
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let style = if i == app.color_scheme {
+                Style::default()
+                    .fg(scheme.highlight_fg)
+                    .bg(scheme.highlight_bg)
+            } else {
+                Style::default().fg(scheme.text_primary)
+            };
+            ListItem::new(format!(" {} ", s.name)).style(style)
+        })
+        .collect();
+
+    let list = List::new(items).block(
+        Block::default()
+            .title(" Color Scheme ")
+            .title_style(Style::default().fg(scheme.title).bold())
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(scheme.border_focus))
+            .style(Style::default().bg(scheme.background)),
+    );
+
+    frame.render_widget(list, area);
+}
+
 fn draw_popup(frame: &mut Frame, app: &App) {
+    if matches!(app.popup, Popup::ColorScheme) {
+        draw_color_scheme_popup(frame, app);
+        return;
+    }
+
     let (title, content, small) = match &app.popup {
-        Popup::None => return,
-        Popup::Help => (" Help ", help_text(), false),
+        Popup::None | Popup::ColorScheme => return,
+        Popup::Help => (" Help ", help_text(), true),
         Popup::Error(msg) => (" Error ", vec![Line::from(msg.as_str())], false),
         Popup::SaveConfirm => (
             " Save Playlist? ",
@@ -1419,7 +1583,7 @@ fn draw_popup(frame: &mut Frame, app: &App) {
     };
 
     let area = if small {
-        centered_rect(35, 20, frame.area())
+        centered_rect(40, 35, frame.area())
     } else {
         centered_rect(60, 70, frame.area())
     };
@@ -1437,45 +1601,41 @@ fn draw_popup(frame: &mut Frame, app: &App) {
 }
 
 fn help_text() -> Vec<Line<'static>> {
+    let key = Style::default().fg(Color::Cyan);
+    let hdr = Style::default().fg(Color::Yellow).bold();
+    let dim = Style::default().fg(Color::DarkGray);
+
+    macro_rules! row {
+        ($k1:expr, $d1:expr, $k2:expr, $d2:expr) => {
+            Line::from(vec![
+                Span::styled(format!(" {:<5}", $k1), key),
+                Span::raw(format!("{:<11}", $d1)),
+                Span::styled("│", dim),
+                Span::styled(format!(" {:<5}", $k2), key),
+                Span::raw($d2),
+            ])
+        };
+    }
+
     vec![
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "  Player",
-            Style::default().fg(Color::Yellow).bold(),
-        )]),
-        Line::from("  SPACE      Toggle play/pause"),
-        Line::from("  1-9        Jump to subsong 1-9"),
-        Line::from("  +/-        Next/previous subsong"),
-        Line::from("  s          Switch SID chip (6581/8580)"),
-        Line::from("  c          Cycle voice color scheme"),
-        Line::from("  a          Add current song to playlist"),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "  Playlist",
-            Style::default().fg(Color::Yellow).bold(),
-        )]),
-        Line::from("  Up/Down    Navigate"),
-        Line::from("  Enter      Play selected"),
-        Line::from("  Backspace  Remove from playlist"),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "  HVSC Browser",
-            Style::default().fg(Color::Yellow).bold(),
-        )]),
-        Line::from("  Up/Down    Navigate"),
-        Line::from("  Enter      Enter dir / Play file"),
-        Line::from("  Left/BS    Go to parent directory"),
-        Line::from("  /          Search (Esc to cancel)"),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "  General",
-            Style::default().fg(Color::Yellow).bold(),
-        )]),
-        Line::from("  Tab        Switch playlist/HVSC"),
-        Line::from("  h/?        Show this help"),
-        Line::from("  q          Quit"),
-        Line::from(""),
-        Line::from("  Press any key to close"),
+        Line::from(vec![
+            Span::styled(" Player          ", hdr),
+            Span::styled("│", dim),
+            Span::styled(" Browser", hdr),
+        ]),
+        row!("SPC", "Play/pause", "↑↓", "Navigate"),
+        row!("1-9", "Subsong", "Enter", "Open/play"),
+        row!("+/-", "Next/prev", "←/BS", "Parent dir"),
+        row!("s", "6581/8580", "/", "Search STIL"),
+        row!("c", "Colors", "Tab", "Switch panel"),
+        row!("a", "Add to list", "BS", "Remove item"),
+        Line::from("─────────────────┴────────────────"),
+        Line::from(vec![
+            Span::styled(" h/?", key),
+            Span::raw(" Help   "),
+            Span::styled("q", key),
+            Span::raw(" Quit"),
+        ]),
     ]
 }
 
