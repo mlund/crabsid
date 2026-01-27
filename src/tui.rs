@@ -1254,9 +1254,9 @@ fn sid_info_lines(app: &App) -> Vec<Line<'static>> {
     let label = Style::default().fg(scheme.text_secondary);
 
     let status = if app.paused {
-        Span::styled("  [PAUSED]", Style::default().fg(c64::YELLOW).bold())
+        Span::styled("  [PAUSED]", Style::default().fg(scheme.title).bold())
     } else {
-        Span::styled("  [PLAYING]", Style::default().fg(c64::GREEN))
+        Span::styled("  [PLAYING]", Style::default().fg(scheme.accent))
     };
 
     let chip = match app.chip_model {
@@ -1290,7 +1290,7 @@ fn sid_info_lines(app: &App) -> Vec<Line<'static>> {
                 Style::default().fg(scheme.accent),
             ),
             Span::styled("  ", Style::default()),
-            Span::styled(chip, Style::default().fg(c64::PURPLE)),
+            Span::styled(chip, Style::default().fg(scheme.text_secondary)),
             status,
         ]),
     ]
@@ -1543,9 +1543,11 @@ fn draw_popup(frame: &mut Frame, app: &App) {
         return;
     }
 
+    let scheme = app.scheme();
+
     let (title, content, small) = match &app.popup {
         Popup::None | Popup::ColorScheme => return,
-        Popup::Help => (" Help ", help_text(), true),
+        Popup::Help => (" Help ", help_text(scheme), true),
         Popup::Error(msg) => (" Error ", vec![Line::from(msg.as_str())], false),
         Popup::SaveConfirm => (
             " Save Playlist? ",
@@ -1555,9 +1557,9 @@ fn draw_popup(frame: &mut Frame, app: &App) {
                 Line::from(""),
                 Line::from(vec![
                     Span::raw("    "),
-                    Span::styled("Y", Style::default().fg(Color::Green).bold()),
+                    Span::styled("Y", Style::default().fg(scheme.accent).bold()),
                     Span::raw("/Enter = Save    "),
-                    Span::styled("N", Style::default().fg(Color::Red).bold()),
+                    Span::styled("N", Style::default().fg(scheme.title).bold()),
                     Span::raw(" = Discard"),
                 ]),
             ],
@@ -1566,9 +1568,9 @@ fn draw_popup(frame: &mut Frame, app: &App) {
         Popup::HvscSearch => {
             let query = app.hvsc_search.as_deref().unwrap_or("");
             let line = Line::from(vec![
-                Span::styled(" > ", Style::default().fg(Color::Cyan)),
+                Span::styled(" > ", Style::default().fg(scheme.accent)),
                 Span::raw(query),
-                Span::styled("_", Style::default().fg(Color::Cyan)),
+                Span::styled("_", Style::default().fg(scheme.accent)),
             ]);
             (
                 " STIL Search ",
@@ -1592,18 +1594,18 @@ fn draw_popup(frame: &mut Frame, app: &App) {
 
     let block = Block::default()
         .title(title)
-        .title_style(Style::default().fg(Color::Yellow).bold())
+        .title_style(Style::default().fg(scheme.title).bold())
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(scheme.border_focus));
 
     let para = Paragraph::new(content).block(block);
     frame.render_widget(para, area);
 }
 
-fn help_text() -> Vec<Line<'static>> {
-    let key = Style::default().fg(Color::Cyan);
-    let hdr = Style::default().fg(Color::Yellow).bold();
-    let dim = Style::default().fg(Color::DarkGray);
+fn help_text(scheme: &ColorScheme) -> Vec<Line<'static>> {
+    let key = Style::default().fg(scheme.accent);
+    let hdr = Style::default().fg(scheme.title).bold();
+    let dim = Style::default().fg(scheme.text_secondary);
 
     macro_rules! row {
         ($k1:expr, $d1:expr, $k2:expr, $d2:expr) => {
