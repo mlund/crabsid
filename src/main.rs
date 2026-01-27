@@ -121,17 +121,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         run_simple(&sid_file, initial_song)?;
     } else {
         let focus_hvsc = args.files.is_empty() && playlist.is_empty();
-        tui::run_tui(
+        let config = tui::TuiConfig {
             player,
-            &sid_file,
-            initial_song,
+            sid_file: &sid_file,
+            song: initial_song,
             playlist,
             playlist_path,
             focus_hvsc,
             playlist_modified,
-            &args.hvsc_url,
-            args.playtime,
-        )?;
+            hvsc_url: &args.hvsc_url,
+            playtime_secs: args.playtime,
+        };
+        tui::run_tui(config)?;
     }
 
     Ok(())

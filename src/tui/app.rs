@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use super::theme::{ColorScheme, DEFAULT_SCHEME, SCHEMES};
 use super::widgets::{VoiceScopes, VuMeter};
+use super::TuiConfig;
 
 /// Which browser panel has focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,56 +98,47 @@ pub struct App<'a> {
 
 impl<'a> App<'a> {
     /// Creates the application with all components.
-    pub fn new(
-        player: SharedPlayer,
-        sid_file: &'a SidFile,
-        song: u16,
-        playlist: Playlist,
-        playlist_path: PathBuf,
-        focus_hvsc: bool,
-        playlist_modified: bool,
-        hvsc_url: &str,
-        playtime_secs: u64,
-    ) -> Self {
-        let chip_model = player
+    pub fn new(config: TuiConfig<'a>) -> Self {
+        let chip_model = config
+            .player
             .lock()
             .map(|p| p.chip_model())
             .unwrap_or(ChipModel::Mos6581);
 
-        let mut hvsc_browser = HvscBrowser::new(hvsc_url);
+        let mut hvsc_browser = HvscBrowser::new(config.hvsc_url);
         hvsc_browser.load_stil();
 
-        let browser_focus = if focus_hvsc {
+        let browser_focus = if config.focus_hvsc {
             BrowserFocus::Hvsc
         } else {
             BrowserFocus::Playlist
         };
 
         Self {
-            player,
-            sid_file,
-            current_song: song,
-            total_songs: sid_file.songs,
+            player: config.player,
+            sid_file: config.sid_file,
+            current_song: config.song,
+            total_songs: config.sid_file.songs,
             paused: false,
             chip_model,
             vu_meter: VuMeter::new(),
             voice_scopes: VoiceScopes::new(),
-            playlist_browser: PlaylistBrowser::new(playlist),
-            playlist_path,
+            playlist_browser: PlaylistBrowser::new(config.playlist),
+            playlist_path: config.playlist_path,
             hvsc_browser,
             browser_focus,
             current_browser_sid: None,
             current_source: None,
             popup: Popup::None,
-            playlist_modified,
+            playlist_modified: config.playlist_modified,
             color_scheme: DEFAULT_SCHEME,
             hvsc_search: None,
             hvsc_search_results: Vec::new(),
             hvsc_search_index: 0,
             song_elapsed: Duration::ZERO,
             song_resumed_at: Instant::now(),
-            song_timeout: Duration::from_secs(playtime_secs),
-            default_timeout: Duration::from_secs(playtime_secs),
+            song_timeout: Duration::from_secs(config.playtime_secs),
+            default_timeout: Duration::from_secs(config.playtime_secs),
         }
     }
 

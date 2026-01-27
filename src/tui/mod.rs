@@ -28,33 +28,26 @@ use crate::sid_file::SidFile;
 
 const TARGET_FPS: u64 = 30;
 
+/// Configuration for the TUI.
+pub struct TuiConfig<'a> {
+    pub player: SharedPlayer,
+    pub sid_file: &'a SidFile,
+    pub song: u16,
+    pub playlist: Playlist,
+    pub playlist_path: PathBuf,
+    pub focus_hvsc: bool,
+    pub playlist_modified: bool,
+    pub hvsc_url: &'a str,
+    pub playtime_secs: u64,
+}
+
 /// Main entry point for the TUI.
-pub fn run_tui(
-    player: SharedPlayer,
-    sid_file: &SidFile,
-    song: u16,
-    playlist: Playlist,
-    playlist_path: PathBuf,
-    focus_hvsc: bool,
-    playlist_modified: bool,
-    hvsc_url: &str,
-    playtime_secs: u64,
-) -> io::Result<()> {
+pub fn run_tui(config: TuiConfig) -> io::Result<()> {
     stdout().execute(EnterAlternateScreen)?;
     enable_raw_mode()?;
 
     let terminal = ratatui::init();
-    let app = App::new(
-        player,
-        sid_file,
-        song,
-        playlist,
-        playlist_path,
-        focus_hvsc,
-        playlist_modified,
-        hvsc_url,
-        playtime_secs,
-    );
+    let app = App::new(config);
     let result = run_app(terminal, app);
 
     disable_raw_mode()?;
