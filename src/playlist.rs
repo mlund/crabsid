@@ -6,6 +6,15 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::Path;
 
+/// Default songs for a new playlist.
+const DEFAULT_PLAYLIST: &[&str] = &[
+    "https://hvsc.brona.dk/HVSC/C64Music/MUSICIANS/L/Lft/To_Die_For.sid",
+    "https://hvsc.brona.dk/HVSC/C64Music/MUSICIANS/D/Da_Blondie/Back_to_the_Roots.sid",
+    "https://hvsc.brona.dk/HVSC/C64Music/MUSICIANS/0-9/20CC/van_Santen_Edwin/Spijkerhoek.sid@1",
+    "https://hvsc.brona.dk/HVSC/C64Music/MUSICIANS/L/Laxity/Stinsens_Last_Night_of_89.sid@1",
+    "https://hvsc.brona.dk/HVSC/C64Music/MUSICIANS/M/Mitch_and_Dane/Dane/Wasted_All_These_Years.sid@1",
+];
+
 /// A single entry in a playlist, representing a SID tune source.
 #[derive(Debug, Clone)]
 pub struct PlaylistEntry {
@@ -86,19 +95,29 @@ pub struct Playlist {
 
 impl Playlist {
     /// Creates an empty playlist.
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
         }
     }
 
-    /// Loads a playlist from an m3u file, creating empty if file doesn't exist.
+    /// Loads a playlist from an m3u file, creating with defaults if file doesn't exist.
     pub fn load_or_create<P: AsRef<Path>>(path: P) -> io::Result<Self> {
         if path.as_ref().exists() {
             Self::load(path)
         } else {
-            Ok(Self::new())
+            Ok(Self::with_defaults())
         }
+    }
+
+    /// Creates a playlist with default songs.
+    fn with_defaults() -> Self {
+        let entries = DEFAULT_PLAYLIST
+            .iter()
+            .filter_map(|s| PlaylistEntry::new(s))
+            .collect();
+        Self { entries }
     }
 
     /// Loads a playlist from an m3u file.
