@@ -113,6 +113,82 @@ impl StilDatabase {
     }
 }
 
+/// Song lengths database mapping MD5 hashes to per-subsong durations.
+#[derive(Debug, Default)]
+pub struct SonglengthsDatabase {
+    entries: HashMap<String, Vec<std::time::Duration>>,
+}
+
+impl SonglengthsDatabase {
+    /// Fetches and parses the Songlengths.md5 file from HVSC.
+    pub fn fetch(base_url: &str) -> io::Result<Self> {
+        let url = format!("{base_url}/DOCUMENTS/Songlengths.md5");
+        let response = ureq::get(&url)
+            .call()
+            .map_err(|e: ureq::Error| io::Error::other(e.to_string()))?;
+
+        let mut content = String::new();
+        response
+            .into_body()
+            .into_reader()
+            .read_to_string(&mut content)?;
+        Ok(Self::parse(&content))
+    }
+
+    fn parse(content: &str) -> Self {
+        let mut entries = HashMap::new();
+        for line in content.lines() {
+            // Skip comments and empty lines
+            if line.starts_with(';') || line.starts_with('[') || line.trim().is_empty() {
+                continue;
+            }
+            // Format: <md5>=<time1> <time2> ...
+            if let Some((hash, times)) = line.split_once('=') {
+                let durations: Vec<std::time::Duration> = times
+                    .split_whitespace()
+                    .filter_map(parse_duration)
+                    .collect();
+                if !durations.is_empty() {
+                    entries.insert(hash.to_lowercase(), durations);
+                }
+            }
+        }
+        Self { entries }
+    }
+
+    /// Looks up song durations by MD5 hash.
+    pub fn get(&self, md5: &str) -> Option<&[std::time::Duration]> {
+        self.entries.get(&md5.to_lowercase()).map(|v| v.as_slice())
+    }
+
+    /// Returns the number of entries in the database.
+    #[allow(dead_code)] // May be useful for status display
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
+/// Parses duration string "mm:ss" or "mm:ss.mmm" into Duration.
+fn parse_duration(s: &str) -> Option<std::time::Duration> {
+    // Remove any trailing attributes like "(G)" or "(M)"
+    let s = s.split('(').next()?.trim();
+    let (mins, rest) = s.split_once(':')?;
+    let mins: u64 = mins.parse().ok()?;
+
+    // Handle "ss" or "ss.mmm"
+    let (secs, millis) = if let Some((s, ms)) = rest.split_once('.') {
+        let secs: u64 = s.parse().ok()?;
+        let millis: u64 = ms.parse().ok()?;
+        (secs, millis)
+    } else {
+        (rest.parse().ok()?, 0)
+    };
+
+    Some(std::time::Duration::from_millis(
+        mins * 60_000 + secs * 1000 + millis,
+    ))
+}
+
 /// An entry in the HVSC browser (directory or file).
 #[derive(Debug, Clone)]
 pub struct HvscEntry {
@@ -160,6 +236,8 @@ pub struct HvscBrowser {
     pub stil: Option<StilDatabase>,
     /// STIL loading error (persists across navigation)
     pub stil_error: Option<String>,
+    /// Songlengths database for durations
+    pub songlengths: Option<SonglengthsDatabase>,
     /// Loading state
     pub loading: bool,
     /// Error message if any
@@ -194,16 +272,21 @@ impl HvscBrowser {
             selected: 0,
             stil: None,
             stil_error: None,
+            songlengths: None,
             loading: false,
             error: None,
         }
     }
 
-    /// Fetches the STIL database.
+    /// Fetches the STIL and Songlengths databases.
     pub fn load_stil(&mut self) {
         match StilDatabase::fetch(&self.base_url) {
             Ok(db) => self.stil = Some(db),
             Err(e) => self.stil_error = Some(e.to_string()),
+        }
+        // Songlengths errors are silently ignored - we just fall back to playtime
+        if let Ok(db) = SonglengthsDatabase::fetch(&self.base_url) {
+            self.songlengths = Some(db);
         }
     }
 
@@ -215,6 +298,13 @@ impl HvscBrowser {
             return None;
         }
         self.stil.as_ref()?.get(&entry.path)
+    }
+
+    /// Returns song duration for given MD5 and subsong (1-indexed), if available.
+    pub fn song_duration(&self, md5: &str, subsong: u16) -> Option<std::time::Duration> {
+        let durations = self.songlengths.as_ref()?.get(md5)?;
+        // Subsongs are 1-indexed, array is 0-indexed
+        durations.get(subsong.saturating_sub(1) as usize).copied()
     }
 
     /// Navigate into the selected directory or return the selected file.

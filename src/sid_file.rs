@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Mikael Lund
 
+use md5::{Digest, Md5};
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -57,6 +58,8 @@ pub struct SidFile {
     pub flags: u16,
     /// 6502 machine code and data
     pub data: Vec<u8>,
+    /// MD5 hash of original file (for Songlengths lookup)
+    pub md5: String,
 }
 
 impl SidFile {
@@ -71,6 +74,9 @@ impl SidFile {
         if bytes.len() < HEADER_MIN_SIZE {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "File too small"));
         }
+
+        // Compute MD5 hash of original file for Songlengths lookup
+        let md5 = format!("{:x}", Md5::digest(bytes));
 
         let magic = String::from_utf8_lossy(&bytes[0..4]).to_string();
         if magic != "PSID" && magic != "RSID" {
@@ -131,6 +137,7 @@ impl SidFile {
             released,
             flags,
             data,
+            md5,
         })
     }
 

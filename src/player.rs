@@ -474,6 +474,7 @@ mod tests {
             released: String::new(),
             flags: 0,
             data: vec![0x60, 0x60, 0x60],
+            md5: String::new(),
         }
     }
 

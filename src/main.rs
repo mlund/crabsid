@@ -48,6 +48,10 @@ struct Args {
     /// HVSC mirror base URL
     #[arg(long, default_value = hvsc::DEFAULT_HVSC_URL)]
     hvsc_url: String,
+
+    /// Maximum song playtime in seconds before advancing
+    #[arg(long, default_value = "180")]
+    playtime: u64,
 }
 
 fn default_playlist_path() -> PathBuf {
@@ -126,6 +130,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             focus_hvsc,
             playlist_modified,
             &args.hvsc_url,
+            args.playtime,
         )?;
     }
 
@@ -149,6 +154,7 @@ fn create_silent_sid() -> SidFile {
         released: String::new(),
         flags: 0,
         data: vec![0x60, 0x60, 0x60], // RTS instructions
+        md5: String::new(),
     }
 }
 

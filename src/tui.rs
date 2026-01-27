@@ -398,6 +398,14 @@ pub struct App<'a> {
     hvsc_search_results: Vec<String>,
     /// Current index in search results
     hvsc_search_index: usize,
+    /// Accumulated play time for current song (pauses don't count)
+    song_elapsed: Duration,
+    /// When playback last resumed (None if paused at start)
+    song_resumed_at: Instant,
+    /// Current song playtime (from Songlengths or default)
+    song_timeout: Duration,
+    /// Default playtime when not in Songlengths database
+    default_timeout: Duration,
 }
 
 impl<'a> App<'a> {
@@ -411,6 +419,7 @@ impl<'a> App<'a> {
         focus_hvsc: bool,
         playlist_modified: bool,
         hvsc_url: &str,
+        playtime_secs: u64,
     ) -> Self {
         let chip_model = player
             .lock()
@@ -447,6 +456,10 @@ impl<'a> App<'a> {
             hvsc_search: None,
             hvsc_search_results: Vec::new(),
             hvsc_search_index: 0,
+            song_elapsed: Duration::ZERO,
+            song_resumed_at: Instant::now(),
+            song_timeout: Duration::from_secs(playtime_secs),
+            default_timeout: Duration::from_secs(playtime_secs),
         }
     }
 
@@ -566,12 +579,59 @@ impl<'a> App<'a> {
             self.paused = player.is_paused();
             self.chip_model = player.chip_model();
         }
+
+        // Auto-advance when playtime exceeded
+        if !self.paused && self.song_elapsed_total() >= self.song_timeout {
+            self.advance_song();
+        }
+    }
+
+    /// Advances to next subsong, or next playlist/HVSC entry if at last subsong.
+    fn advance_song(&mut self) {
+        if self.current_song < self.total_songs {
+            self.current_song += 1;
+            self.load_song_on_player(self.current_song);
+            self.reset_song_timer();
+        } else {
+            // At last subsong, try next entry based on current browser focus
+            match self.browser_focus {
+                BrowserFocus::Playlist => {
+                    self.playlist_browser.select_next();
+                    self.load_playlist_selected();
+                }
+                BrowserFocus::Hvsc => self.try_next_hvsc_file(),
+            }
+        }
+    }
+
+    /// Returns total elapsed play time (excludes paused time).
+    fn song_elapsed_total(&self) -> Duration {
+        if self.paused {
+            self.song_elapsed
+        } else {
+            self.song_elapsed + self.song_resumed_at.elapsed()
+        }
+    }
+
+    /// Resets the song timer for a new song/subsong.
+    fn reset_song_timer(&mut self) {
+        self.song_elapsed = Duration::ZERO;
+        self.song_resumed_at = Instant::now();
     }
 
     fn toggle_pause(&mut self) {
         if let Ok(mut player) = self.player.lock() {
             player.toggle_pause();
+            let was_paused = self.paused;
             self.paused = player.is_paused();
+
+            if self.paused && !was_paused {
+                // Pausing: accumulate elapsed time
+                self.song_elapsed += self.song_resumed_at.elapsed();
+            } else if !self.paused && was_paused {
+                // Resuming: reset resume timestamp
+                self.song_resumed_at = Instant::now();
+            }
         }
     }
 
@@ -579,6 +639,7 @@ impl<'a> App<'a> {
         if self.current_song < self.total_songs {
             self.current_song += 1;
             self.load_song_on_player(self.current_song);
+            self.reset_song_timer();
         }
     }
 
@@ -586,6 +647,7 @@ impl<'a> App<'a> {
         if self.current_song > 1 {
             self.current_song -= 1;
             self.load_song_on_player(self.current_song);
+            self.reset_song_timer();
         }
     }
 
@@ -741,6 +803,14 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Updates song_timeout from Songlengths database, falling back to default_timeout.
+    fn update_song_timeout(&mut self, md5: &str, song: u16) {
+        self.song_timeout = self
+            .hvsc_browser
+            .song_duration(md5, song)
+            .unwrap_or(self.default_timeout);
+    }
+
     /// Attempts to play a SID file. Returns true on success, false on failure.
     fn play_sid_file(&mut self, sid_file: SidFile, song: u16, source: String) -> bool {
         // Check before attempting emulation
@@ -772,8 +842,12 @@ impl<'a> App<'a> {
             return false;
         }
 
+        // Set timeout from Songlengths or fall back to default
+        self.update_song_timeout(&sid_file.md5, song);
         self.current_browser_sid = Some(sid_file);
         self.current_source = Some(source);
+        self.song_elapsed = Duration::ZERO;
+        self.song_resumed_at = Instant::now();
         true
     }
 
@@ -782,6 +856,7 @@ impl<'a> App<'a> {
         if song >= 1 && song <= self.total_songs {
             self.current_song = song;
             self.load_song_on_player(song);
+            self.reset_song_timer();
         }
     }
 
@@ -796,6 +871,15 @@ impl<'a> App<'a> {
         if let Some(msg) = error {
             self.show_error(msg);
         }
+
+        // Update timeout for new subsong
+        let md5 = self
+            .current_browser_sid
+            .as_ref()
+            .map(|s| &s.md5)
+            .unwrap_or(&self.sid_file.md5)
+            .clone();
+        self.update_song_timeout(&md5, song);
     }
 
     fn show_help(&mut self) {
@@ -836,6 +920,7 @@ pub fn run_tui(
     focus_hvsc: bool,
     playlist_modified: bool,
     hvsc_url: &str,
+    playtime_secs: u64,
 ) -> io::Result<()> {
     stdout().execute(EnterAlternateScreen)?;
     enable_raw_mode()?;
@@ -850,6 +935,7 @@ pub fn run_tui(
         focus_hvsc,
         playlist_modified,
         hvsc_url,
+        playtime_secs,
     );
     let result = run_app(terminal, app);
 
@@ -1257,10 +1343,18 @@ fn sid_info_lines(app: &App) -> Vec<Line<'static>> {
     let sid = app.display_sid();
     let label = Style::default().fg(scheme.text_secondary);
 
+    let remaining = app.song_timeout.saturating_sub(app.song_elapsed_total());
+    let mins = remaining.as_secs() / 60;
+    let secs = remaining.as_secs() % 60;
+    let time_str = format!(" [{mins}:{secs:02}]");
+
     let status = if app.paused {
         Span::styled("  [PAUSED]", Style::default().fg(scheme.title).bold())
     } else {
-        Span::styled("  [PLAYING]", Style::default().fg(scheme.accent))
+        Span::styled(
+            format!("  [PLAYING]{time_str}"),
+            Style::default().fg(scheme.accent),
+        )
     };
 
     let chip = match app.chip_model {
