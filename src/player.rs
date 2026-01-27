@@ -359,7 +359,8 @@ impl Player {
     /// Returns the new model for that SID.
     pub fn switch_chip_model(&mut self, sid_index: Option<usize>) -> ChipModel {
         let idx = sid_index.unwrap_or(0);
-        if idx >= self.chip_models.len() {
+        let sid_count = self.cpu.memory.sids.len();
+        if idx >= self.chip_models.len() || idx >= sid_count {
             return self
                 .chip_models
                 .first()

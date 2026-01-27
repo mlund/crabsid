@@ -291,29 +291,18 @@ impl<'a> App<'a> {
     /// For multi-SID tunes, pressing 's' repeatedly cycles through all SIDs.
     pub fn switch_chip(&mut self) {
         if let Ok(mut player) = self.player.lock() {
-            let new_model = player.switch_chip_model(Some(self.selected_sid));
+            // Ensure selected_sid is valid for current SID count
+            let sid_count = player.sid_count();
+            if self.selected_sid >= sid_count {
+                self.selected_sid = 0;
+            }
+
+            player.switch_chip_model(Some(self.selected_sid));
             self.chip_models = player.chip_models().to_vec();
 
             // Cycle to next SID for the next 's' press
-            let sid_count = player.sid_count();
             if sid_count > 1 {
                 self.selected_sid = (self.selected_sid + 1) % sid_count;
-            }
-            drop(player);
-
-            // Show feedback for which SID was changed
-            if self.chip_models.len() > 1 {
-                let model_name = match new_model {
-                    ChipModel::Mos6581 => "6581",
-                    ChipModel::Mos8580 => "8580",
-                };
-                // selected_sid was already incremented, so previous index is the one we changed
-                let changed_idx = if self.selected_sid == 0 {
-                    self.chip_models.len()
-                } else {
-                    self.selected_sid
-                };
-                self.popup = Popup::Error(format!("SID {} -> {}", changed_idx, model_name));
             }
         }
     }
