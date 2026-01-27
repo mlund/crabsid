@@ -36,6 +36,11 @@ impl C64Memory {
         self.ram[start..end].copy_from_slice(&data[..end - start]);
     }
 
+    /// Clears zero page ($0000-$00FF) and stack ($0100-$01FF).
+    pub fn clear_zeropage_and_stack(&mut self) {
+        self.ram[0x0000..0x0200].fill(0);
+    }
+
     /// Replace the SID chip with a new instance of the specified model
     pub fn set_chip_model(&mut self, chip_model: ChipModel) {
         self.sid = Sid::new(chip_model);

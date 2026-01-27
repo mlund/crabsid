@@ -175,11 +175,19 @@ impl<'a> App<'a> {
     }
 
     pub fn update(&mut self) {
-        if let Ok(player) = self.player.lock() {
+        let playback_error = if let Ok(mut player) = self.player.lock() {
             self.vu_meter.update(player.voice_levels());
             self.voice_scopes.update(&player.envelope_samples());
             self.paused = player.is_paused();
             self.chip_model = player.chip_model();
+            player.take_error()
+        } else {
+            None
+        };
+
+        // Show playback error after releasing player lock
+        if let Some(err) = playback_error {
+            self.show_error(format!("Playback error: {err}"));
         }
 
         // Auto-advance when playtime exceeded (pause if error popup is showing)

@@ -109,10 +109,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _device = run_output_device(params, {
         let player = player.clone();
         move |data| {
-            if let Ok(mut p) = player.lock()
-                && let Err(e) = p.fill_buffer(data)
-            {
-                eprintln!("Playback error: {e}");
+            if let Ok(mut p) = player.lock() {
+                p.fill_buffer(data);
             }
         }
     })?;

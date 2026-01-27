@@ -58,6 +58,8 @@ pub struct Player {
     clock_hz: u32,
     /// Audio output sample rate
     sample_rate: u32,
+    /// Last playback error (auto-pauses on error)
+    playback_error: Option<String>,
 }
 
 /// Errors that can occur while initializing or running SID routines.
@@ -132,6 +134,7 @@ impl Player {
             chip_model,
             clock_hz,
             sample_rate,
+            playback_error: None,
         })
     }
 
@@ -139,10 +142,11 @@ impl Player {
     ///
     /// Each sample triggers the appropriate number of CPU/SID clock cycles
     /// to maintain cycle-accurate timing between the 1MHz system and audio rate.
-    pub fn fill_buffer(&mut self, buffer: &mut [f32]) -> PlayerResult<()> {
-        if self.paused {
+    /// On error, auto-pauses and stores error message for TUI to display.
+    pub fn fill_buffer(&mut self, buffer: &mut [f32]) {
+        if self.paused || self.playback_error.is_some() {
             buffer.fill(0.0);
-            return Ok(());
+            return;
         }
 
         for sample in buffer.iter_mut() {
@@ -154,7 +158,12 @@ impl Player {
             for _ in 0..cycles_to_run {
                 if self.frame_cycle_count >= self.cycles_per_frame {
                     self.frame_cycle_count = 0;
-                    self.call_play()?;
+                    if let Err(e) = self.call_play() {
+                        self.playback_error = Some(e.to_string());
+                        self.paused = true;
+                        buffer.fill(0.0);
+                        return;
+                    }
                 }
 
                 self.cpu.memory.sid.clock();
@@ -174,7 +183,6 @@ impl Player {
                 self.envelope_write_pos = (self.envelope_write_pos + 1) % SCOPE_BUFFER_SIZE;
             }
         }
-        Ok(())
     }
 
     /// Returns envelope history for each voice, ordered oldest to newest
@@ -198,6 +206,11 @@ impl Player {
     /// Returns whether playback is currently paused.
     pub const fn is_paused(&self) -> bool {
         self.paused
+    }
+
+    /// Takes and clears any pending playback error.
+    pub fn take_error(&mut self) -> Option<String> {
+        self.playback_error.take()
     }
 
     /// Loads a completely new SID file, replacing the current tune.
@@ -244,11 +257,19 @@ impl Player {
     /// Reinitialize for a different song number (1-indexed).
     /// Reloads SID data, resets CPU state, and runs the init routine.
     pub fn load_song(&mut self, song: u16) -> PlayerResult<()> {
+        // Clear zero page and stack to remove state from previous song
+        self.cpu.memory.clear_zeropage_and_stack();
+
         // Reload the SID data to reset any modified memory
         self.cpu.memory.load(self.load_address, &self.sid_data);
 
         // Reset all internal SID state (envelope counters, oscillators, filters)
         self.cpu.memory.sid.reset();
+
+        // Reset all CPU registers (not just accumulator)
+        self.cpu.registers.index_x = 0;
+        self.cpu.registers.index_y = 0;
+        self.cpu.registers.status = mos6502::registers::Status::empty();
 
         // Set up CPU for init routine
         self.cpu.memory.set_byte(0x0000, 0x60);
@@ -267,6 +288,7 @@ impl Player {
         self.cycle_accumulator = 0.0;
         self.frame_cycle_count = 0;
         self.paused = false;
+        self.playback_error = None;
         Ok(())
     }
 
