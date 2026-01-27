@@ -182,8 +182,9 @@ impl<'a> App<'a> {
             self.chip_model = player.chip_model();
         }
 
-        // Auto-advance when playtime exceeded
-        if !self.paused && self.song_elapsed_total() >= self.song_timeout {
+        // Auto-advance when playtime exceeded (pause if error popup is showing)
+        let has_error_popup = matches!(self.popup, Popup::Error(_));
+        if !self.paused && !has_error_popup && self.song_elapsed_total() >= self.song_timeout {
             self.advance_song();
         }
     }
@@ -195,12 +196,20 @@ impl<'a> App<'a> {
             self.load_song_on_player(self.current_song);
             self.reset_song_timer();
         } else {
+            // Reset timer before attempting load to prevent infinite loop if all files fail
+            self.reset_song_timer();
             match self.browser_focus {
                 BrowserFocus::Playlist => {
                     self.playlist_browser.select_next();
                     self.load_playlist_selected();
                 }
-                BrowserFocus::Hvsc => self.try_next_hvsc_file(),
+                BrowserFocus::Hvsc => {
+                    if !self.hvsc_search_results.is_empty() {
+                        self.try_next_hvsc_search_result();
+                    } else {
+                        self.try_next_hvsc_file();
+                    }
+                }
             }
         }
     }
@@ -328,6 +337,11 @@ impl<'a> App<'a> {
                 }
                 Err(e) => self.show_error(format!("Skipped: {e}")),
             }
+            // Stop if error popup is showing
+            if matches!(self.popup, Popup::Error(_)) {
+                self.playlist_browser.state.select(Some(idx));
+                return;
+            }
         }
     }
 
@@ -340,13 +354,10 @@ impl<'a> App<'a> {
         match entry.load(&self.hvsc_browser.base_url) {
             Ok(sid_file) => {
                 let start_song = sid_file.start_song;
-                if !self.play_sid_file(sid_file, start_song, source) {
-                    self.try_next_hvsc_file();
-                }
+                self.play_sid_file(sid_file, start_song, source);
             }
             Err(e) => {
                 self.show_error(format!("Skipped: {e}"));
-                self.try_next_hvsc_file();
             }
         }
     }
@@ -374,6 +385,10 @@ impl<'a> App<'a> {
                     }
                 }
                 Err(e) => self.show_error(format!("Skipped: {e}")),
+            }
+            // Stop if error popup is showing
+            if matches!(self.popup, Popup::Error(_)) {
+                return;
             }
         }
     }
@@ -505,13 +520,22 @@ impl<'a> App<'a> {
     }
 
     pub fn hvsc_search_select(&mut self) {
+        self.try_load_hvsc_search_result(0);
+    }
+
+    fn try_next_hvsc_search_result(&mut self) {
+        self.try_load_hvsc_search_result(1);
+    }
+
+    /// Tries to load a search result starting from current index + offset.
+    fn try_load_hvsc_search_result(&mut self, start_offset: usize) {
         let start = self.hvsc_search_index;
         let len = self.hvsc_search_results.len();
         if len == 0 {
             return;
         }
 
-        for offset in 0..len {
+        for offset in start_offset..len {
             let idx = (start + offset) % len;
             let path = &self.hvsc_search_results[idx];
             let entry = HvscEntry {
@@ -530,6 +554,11 @@ impl<'a> App<'a> {
                     }
                 }
                 Err(e) => self.show_error(format!("Skipped: {e}")),
+            }
+            // Stop if error popup is showing
+            if matches!(self.popup, Popup::Error(_)) {
+                self.hvsc_search_index = idx;
+                return;
             }
         }
     }
@@ -557,6 +586,14 @@ impl<'a> App<'a> {
 
     pub fn show_error(&mut self, msg: String) {
         self.popup = Popup::Error(msg);
+        // Pause playback so user can read the error
+        if let Ok(mut player) = self.player.lock()
+            && !player.is_paused()
+        {
+            player.toggle_pause();
+            self.paused = true;
+            self.song_elapsed += self.song_resumed_at.elapsed();
+        }
     }
 
     pub fn close_popup(&mut self) {
