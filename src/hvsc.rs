@@ -6,6 +6,33 @@
 use crate::sid_file::SidFile;
 use std::collections::HashMap;
 use std::io::{self, Read};
+use std::path::Path;
+
+/// Fetches bytes from a URL (http/https) or local path (file://).
+fn fetch_bytes(url: &str) -> io::Result<Vec<u8>> {
+    if let Some(path) = url.strip_prefix("file://") {
+        std::fs::read(Path::new(path))
+    } else {
+        let response = ureq::get(url)
+            .call()
+            .map_err(|e| io::Error::other(e.to_string()))?;
+        let mut bytes = Vec::new();
+        response.into_body().into_reader().read_to_end(&mut bytes)?;
+        Ok(bytes)
+    }
+}
+
+/// Fetches text from a URL or local path, treating bytes as Latin-1.
+fn fetch_latin1_text(url: &str) -> io::Result<String> {
+    let bytes = fetch_bytes(url)?;
+    Ok(bytes.iter().map(|&b| b as char).collect())
+}
+
+/// Fetches text from a URL or local path as UTF-8.
+fn fetch_text(url: &str) -> io::Result<String> {
+    let bytes = fetch_bytes(url)?;
+    String::from_utf8(bytes).map_err(|e| io::Error::other(e.to_string()))
+}
 
 /// Default HVSC mirror URL.
 pub const DEFAULT_HVSC_URL: &str = "https://hvsc.brona.dk/HVSC/C64Music";
@@ -28,15 +55,7 @@ impl StilDatabase {
     /// Fetches and parses the STIL file from HVSC.
     pub fn fetch(base_url: &str) -> io::Result<Self> {
         let url = format!("{base_url}/DOCUMENTS/STIL.txt");
-        let response = ureq::get(&url)
-            .call()
-            .map_err(|e: ureq::Error| io::Error::other(e.to_string()))?;
-
-        // STIL uses Latin-1 encoding, read as bytes and convert
-        let mut bytes = Vec::new();
-        response.into_body().into_reader().read_to_end(&mut bytes)?;
-        let content: String = bytes.iter().map(|&b| b as char).collect();
-
+        let content = fetch_latin1_text(&url)?;
         Ok(Self::parse(&content))
     }
 
@@ -123,15 +142,7 @@ impl SonglengthsDatabase {
     /// Fetches and parses the Songlengths.md5 file from HVSC.
     pub fn fetch(base_url: &str) -> io::Result<Self> {
         let url = format!("{base_url}/DOCUMENTS/Songlengths.md5");
-        let response = ureq::get(&url)
-            .call()
-            .map_err(|e: ureq::Error| io::Error::other(e.to_string()))?;
-
-        let mut content = String::new();
-        response
-            .into_body()
-            .into_reader()
-            .read_to_string(&mut content)?;
+        let content = fetch_text(&url)?;
         Ok(Self::parse(&content))
     }
 
@@ -211,13 +222,7 @@ impl HvscEntry {
         if self.is_dir {
             return Err(io::Error::other("Cannot load directory as SID file"));
         }
-        let url = self.url(base_url);
-        let response = ureq::get(&url)
-            .call()
-            .map_err(|e| io::Error::other(e.to_string()))?;
-
-        let mut bytes = Vec::new();
-        response.into_body().into_reader().read_to_end(&mut bytes)?;
+        let bytes = fetch_bytes(&self.url(base_url))?;
         SidFile::parse(&bytes)
     }
 }
@@ -386,17 +391,54 @@ impl HvscBrowser {
 
 /// Fetches and parses a directory listing from HVSC.
 fn fetch_directory(base_url: &str, path: &str) -> io::Result<Vec<HvscEntry>> {
-    let url = format!("{base_url}{path}");
-    let response = ureq::get(&url)
-        .call()
-        .map_err(|e| io::Error::other(e.to_string()))?;
+    if let Some(base_path) = base_url.strip_prefix("file://") {
+        read_local_directory(base_path, path)
+    } else {
+        fetch_http_directory(base_url, path)
+    }
+}
 
-    let mut html = String::new();
-    response
-        .into_body()
-        .into_reader()
-        .read_to_string(&mut html)?;
+/// Reads a local directory and returns HVSC entries.
+fn read_local_directory(base_path: &str, path: &str) -> io::Result<Vec<HvscEntry>> {
+    let full_path = Path::new(base_path).join(path.trim_start_matches('/'));
+    let mut entries: Vec<HvscEntry> = std::fs::read_dir(&full_path)?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            let is_dir = e.file_type().ok()?.is_dir();
 
+            // Skip non-SID files (but keep directories)
+            if !is_dir && !name.to_lowercase().ends_with(".sid") {
+                return None;
+            }
+
+            let entry_path = if is_dir {
+                format!("{path}{name}/")
+            } else {
+                format!("{path}{name}")
+            };
+
+            Some(HvscEntry {
+                name,
+                path: entry_path,
+                is_dir,
+            })
+        })
+        .collect();
+
+    // Sort: directories first, then alphabetically
+    entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+    });
+
+    Ok(entries)
+}
+
+/// Fetches and parses an HTTP directory listing.
+fn fetch_http_directory(base_url: &str, path: &str) -> io::Result<Vec<HvscEntry>> {
+    let html = fetch_text(&format!("{base_url}{path}"))?;
     Ok(parse_directory_listing(&html, path))
 }
 
