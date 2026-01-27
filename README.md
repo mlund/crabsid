@@ -13,6 +13,8 @@ A TUI and command-line SID music player for C64 SID music playback. Written in R
 - Multi-song files with prev/next navigation
 - **HVSC Browser** - Browse and stream directly from the High Voltage SID Collection
 - **HVSC Search** - Search across 50,000+ SID files by path, title, or artist
+- **Songlengths** - Auto-advances using HVSC song duration database
+- **Local HVSC** - Use a local HVSC copy with `file://` URLs for offline playback
 - **Playlist support** - M3U playlists with local files and URLs
 - Terminal UI with:
   - VU meters showing per-voice envelope levels
@@ -43,6 +45,7 @@ crabsid music.sid --song 3       # Play subsong 3
 crabsid music.sid --chip 8580    # Force 8580 chip emulation
 crabsid -l mylist.m3u            # Load playlist
 crabsid --no-tui music.sid       # Headless mode
+crabsid --hvsc-url file:///path/to/HVSC/C64Music  # Use local HVSC
 ```
 
 ## Keyboard Controls
@@ -79,6 +82,8 @@ crabsid --no-tui music.sid       # Headless mode
 | `-s, --song <N>` | Subsong number to play (default: from file) |
 | `-c, --chip <MODEL>` | SID chip: 6581 or 8580 (default: from file) |
 | `-l, --playlist <FILE>` | Load M3U playlist |
+| `--hvsc-url <URL>` | HVSC mirror URL or local path (file://) |
+| `--playtime <SECS>` | Max song duration before auto-advance (default: 180) |
 | `--no-tui` | Disable TUI, simple text output |
 
 ## Architecture
