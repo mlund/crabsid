@@ -948,7 +948,7 @@ dependencies = [
 [[package]]
 name = "mos6502"
 version = "0.6.2"
-source = "git+https://github.com/mlund/mos6502.git?branch=illegal#e96a64547d26a23f2bdf94568d4017e4e73a5e1c"
+source = "git+https://github.com/mlund/mos6502.git?branch=illegal#9d9e6467b6d428b38fce28bf1551a7d9cd8727ff"
 dependencies = [
  "bitflags 2.10.0",
  "log",
@@ -1423,7 +1423,7 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 [[package]]
 name = "resid-rs"
 version = "1.1.1"
-source = "git+https://github.com/sbechet/resid-rs.git?rev=b57c4ade980ea2641fd2bcf8e5974654204217c1#b57c4ade980ea2641fd2bcf8e5974654204217c1"
+source = "git+https://github.com/gorsat/resid-rs.git?rev=72fbc5d1fa2f061d2bcf737f2879758750ba2819#72fbc5d1fa2f061d2bcf737f2879758750ba2819"
 dependencies = [
  "bit_field",
 ]
@@ -1615,9 +1615,9 @@ checksum = "e320a6c5ad31d271ad523dcf3ad13e2767ad8b1cb8f047f75a8aeaf8da139da2"
 
 [[package]]
 name = "siphasher"
-version = "1.0.1"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56199f7ddabf13fe5074ce809e7d3f42b42ae711800501b5b16ea82ad029c39d"
+checksum = "b2aa850e253778c88a04c3d7323b043aeda9d3e30d5971937c1855769763678e"
 
 [[package]]
 name = "slab"

@@ -11,7 +11,7 @@ categories = ["multimedia::audio", "emulators"]
 
 [dependencies]
 # Using fork with envelope overflow fix (https://github.com/binaryfields/resid-rs/pull/14)
-resid-rs = { git = "https://github.com/sbechet/resid-rs.git", rev = "b57c4ade980ea2641fd2bcf8e5974654204217c1" }
+resid-rs = { git = "https://github.com/gorsat/resid-rs.git", rev = "72fbc5d1fa2f061d2bcf737f2879758750ba2819" }
 mos6502 = { git = "https://github.com/mlund/mos6502.git", branch = "illegal" }
 tinyaudio = "2.0"
 clap = { version = "4", features = ["derive"] }
