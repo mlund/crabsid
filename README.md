@@ -17,7 +17,7 @@ A TUI and command-line SID music player for C64 SID music playback. Written in R
   - VU meters showing per-voice envelope levels
   - Oscilloscope displaying envelope waveforms for all three voices
   - Real-time chip model switching
-  - C64 color schemes (5 themes)
+  - Color schemes (C64, VIC-20, C128, PET, Dracula, and more)
 - Headless mode for background playback
 - Written entirely in Rust
 
@@ -54,7 +54,7 @@ crabsid --no-tui music.sid       # Headless mode
 | `1-9` | Jump to subsong 1-9 |
 | `+/-` | Next/previous subsong |
 | `s` | Switch SID chip (6581/8580) |
-| `c` | Cycle color scheme |
+| `c` | Color scheme picker |
 | `a` | Add current song to playlist |
 
 ### Browser
@@ -80,6 +80,60 @@ crabsid --no-tui music.sid       # Headless mode
 | `-c, --chip <MODEL>` | SID chip: 6581 or 8580 (default: from file) |
 | `-l, --playlist <FILE>` | Load M3U playlist |
 | `--no-tui` | Disable TUI, simple text output |
+
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph Input
+        CLI[CLI args]
+        SID[.sid file]
+        M3U[.m3u playlist]
+        HVSC[(HVSC Online)]
+    end
+
+    subgraph Core["Emulation Core"]
+        CPU[MOS 6502 CPU<br/>mos6502]
+        MEM[C64 Memory<br/>64KB RAM]
+        SIDCHIP[SID Chip<br/>resid-rs]
+        CPU <--> MEM
+        MEM <--> SIDCHIP
+    end
+
+    subgraph Player["Player Thread"]
+        PLAYER[Player]
+        PLAYER --> CPU
+        PLAYER --> SIDCHIP
+    end
+
+    subgraph Audio["Audio Thread"]
+        AUDIO[tinyaudio]
+        BUFFER[Audio Buffer]
+    end
+
+    subgraph UI["TUI · ratatui"]
+        APP[App State]
+        VU[VU Meters]
+        SCOPE[Oscilloscopes]
+        BROWSER[HVSC Browser]
+        PLAYLIST[Playlist Browser]
+        APP --> VU
+        APP --> SCOPE
+        APP --> BROWSER
+        APP --> PLAYLIST
+    end
+
+    CLI --> PLAYER
+    SID --> PLAYER
+    M3U --> PLAYLIST
+    HVSC --> BROWSER
+
+    PLAYER <-->|Arc Mutex| APP
+    PLAYER --> BUFFER
+    BUFFER --> AUDIO
+    SIDCHIP -->|envelope| SCOPE
+    SIDCHIP -->|levels| VU
+```
 
 ## License
 
