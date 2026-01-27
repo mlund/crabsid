@@ -23,8 +23,7 @@ const SAMPLE_RATE: u32 = 44100;
 const BUFFER_SIZE: usize = 1024;
 
 #[derive(Parser)]
-#[command(name = "crabsid")]
-#[command(about = "A SID music player for .sid files")]
+#[command(name = "crabsid", version, about = "C64 SID music player in pure Rust")]
 struct Args {
     /// SID file(s) to play or add to playlist
     #[arg(name = "FILE")]
@@ -45,6 +44,10 @@ struct Args {
     /// Disable TUI and use simple text output
     #[arg(long)]
     no_tui: bool,
+
+    /// HVSC mirror base URL
+    #[arg(long, default_value = hvsc::DEFAULT_HVSC_URL)]
+    hvsc_url: String,
 }
 
 fn default_playlist_path() -> PathBuf {
@@ -122,6 +125,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             playlist_path,
             focus_hvsc,
             playlist_modified,
+            &args.hvsc_url,
         )?;
     }
 

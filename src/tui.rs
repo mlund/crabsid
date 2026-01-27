@@ -410,13 +410,14 @@ impl<'a> App<'a> {
         playlist_path: PathBuf,
         focus_hvsc: bool,
         playlist_modified: bool,
+        hvsc_url: &str,
     ) -> Self {
         let chip_model = player
             .lock()
             .map(|p| p.chip_model())
             .unwrap_or(ChipModel::Mos6581);
 
-        let mut hvsc_browser = HvscBrowser::new();
+        let mut hvsc_browser = HvscBrowser::new(hvsc_url);
         hvsc_browser.load_stil();
 
         let browser_focus = if focus_hvsc {
@@ -524,9 +525,9 @@ impl<'a> App<'a> {
                 path: path.clone(),
                 is_dir: false,
             };
-            let source = entry.url();
+            let source = entry.url(&self.hvsc_browser.base_url);
 
-            match entry.load() {
+            match entry.load(&self.hvsc_browser.base_url) {
                 Ok(sid_file) => {
                     let start_song = sid_file.start_song;
                     if self.play_sid_file(sid_file, start_song, source) {
@@ -662,8 +663,8 @@ impl<'a> App<'a> {
             return;
         };
 
-        let source = entry.url();
-        match entry.load() {
+        let source = entry.url(&self.hvsc_browser.base_url);
+        match entry.load(&self.hvsc_browser.base_url) {
             Ok(sid_file) => {
                 let start_song = sid_file.start_song;
                 if !self.play_sid_file(sid_file, start_song, source) {
@@ -681,6 +682,7 @@ impl<'a> App<'a> {
     fn try_next_hvsc_file(&mut self) {
         let start = self.hvsc_browser.selected;
         let len = self.hvsc_browser.entries.len();
+        let base_url = self.hvsc_browser.base_url.clone();
 
         for offset in 1..len {
             let idx = (start + offset) % len;
@@ -691,8 +693,8 @@ impl<'a> App<'a> {
             }
 
             self.hvsc_browser.selected = idx;
-            let source = entry.url();
-            match entry.load() {
+            let source = entry.url(&base_url);
+            match entry.load(&base_url) {
                 Ok(sid_file) => {
                     let start_song = sid_file.start_song;
                     if self.play_sid_file(sid_file, start_song, source) {
@@ -833,6 +835,7 @@ pub fn run_tui(
     playlist_path: PathBuf,
     focus_hvsc: bool,
     playlist_modified: bool,
+    hvsc_url: &str,
 ) -> io::Result<()> {
     stdout().execute(EnterAlternateScreen)?;
     enable_raw_mode()?;
@@ -846,6 +849,7 @@ pub fn run_tui(
         playlist_path,
         focus_hvsc,
         playlist_modified,
+        hvsc_url,
     );
     let result = run_app(terminal, app);
 

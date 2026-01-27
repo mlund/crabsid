@@ -7,8 +7,8 @@ use crate::sid_file::SidFile;
 use std::collections::HashMap;
 use std::io::{self, Read};
 
-const HVSC_BASE_URL: &str = "https://hvsc.brona.dk/HVSC/C64Music";
-const STIL_URL: &str = "https://hvsc.brona.dk/HVSC/C64Music/DOCUMENTS/STIL.txt";
+/// Default HVSC mirror URL.
+pub const DEFAULT_HVSC_URL: &str = "https://hvsc.brona.dk/HVSC/C64Music";
 
 /// Metadata for a SID file from STIL.
 #[derive(Debug, Clone, Default)]
@@ -26,8 +26,9 @@ pub struct StilDatabase {
 
 impl StilDatabase {
     /// Fetches and parses the STIL file from HVSC.
-    pub fn fetch() -> io::Result<Self> {
-        let response = ureq::get(STIL_URL)
+    pub fn fetch(base_url: &str) -> io::Result<Self> {
+        let url = format!("{base_url}/DOCUMENTS/STIL.txt");
+        let response = ureq::get(&url)
             .call()
             .map_err(|e: ureq::Error| io::Error::other(e.to_string()))?;
 
@@ -125,16 +126,16 @@ pub struct HvscEntry {
 
 impl HvscEntry {
     /// Returns the full URL for this entry.
-    pub fn url(&self) -> String {
-        format!("{HVSC_BASE_URL}{}", self.path)
+    pub fn url(&self, base_url: &str) -> String {
+        format!("{base_url}{}", self.path)
     }
 
     /// Loads this entry as a SID file (only valid for files).
-    pub fn load(&self) -> io::Result<SidFile> {
+    pub fn load(&self, base_url: &str) -> io::Result<SidFile> {
         if self.is_dir {
             return Err(io::Error::other("Cannot load directory as SID file"));
         }
-        let url = self.url();
+        let url = self.url(base_url);
         let response = ureq::get(&url)
             .call()
             .map_err(|e| io::Error::other(e.to_string()))?;
@@ -147,6 +148,8 @@ impl HvscEntry {
 
 /// HVSC directory browser state.
 pub struct HvscBrowser {
+    /// Base URL for HVSC mirror
+    pub base_url: String,
     /// Current directory path
     pub current_path: String,
     /// Entries in current directory
@@ -165,7 +168,7 @@ pub struct HvscBrowser {
 
 impl HvscBrowser {
     /// Creates a new browser at the root level.
-    pub fn new() -> Self {
+    pub fn new(base_url: &str) -> Self {
         let entries = vec![
             HvscEntry {
                 name: "MUSICIANS".to_string(),
@@ -185,6 +188,7 @@ impl HvscBrowser {
         ];
 
         Self {
+            base_url: base_url.to_string(),
             current_path: "/".to_string(),
             entries,
             selected: 0,
@@ -197,7 +201,7 @@ impl HvscBrowser {
 
     /// Fetches the STIL database.
     pub fn load_stil(&mut self) {
-        match StilDatabase::fetch() {
+        match StilDatabase::fetch(&self.base_url) {
             Ok(db) => self.stil = Some(db),
             Err(e) => self.stil_error = Some(e.to_string()),
         }
@@ -246,10 +250,11 @@ impl HvscBrowser {
     /// Navigate to a specific path.
     pub fn navigate_to(&mut self, path: &str) {
         if path == "/" {
-            // STIL is expensive to fetch, preserve it across navigation
+            // Preserve STIL and base_url across navigation
             let stil = self.stil.take();
             let stil_error = self.stil_error.take();
-            *self = Self::new();
+            let base_url = self.base_url.clone();
+            *self = Self::new(&base_url);
             self.stil = stil;
             self.stil_error = stil_error;
             return;
@@ -258,7 +263,7 @@ impl HvscBrowser {
         self.loading = true;
         self.error = None;
 
-        match fetch_directory(path) {
+        match fetch_directory(&self.base_url, path) {
             Ok(entries) => {
                 self.current_path = path.to_string();
                 self.entries = entries;
@@ -290,8 +295,8 @@ impl HvscBrowser {
 }
 
 /// Fetches and parses a directory listing from HVSC.
-fn fetch_directory(path: &str) -> io::Result<Vec<HvscEntry>> {
-    let url = format!("{HVSC_BASE_URL}{path}");
+fn fetch_directory(base_url: &str, path: &str) -> io::Result<Vec<HvscEntry>> {
+    let url = format!("{base_url}{path}");
     let response = ureq::get(&url)
         .call()
         .map_err(|e| io::Error::other(e.to_string()))?;
