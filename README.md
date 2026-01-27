@@ -8,6 +8,7 @@ A TUI and command-line SID music player for C64 SID music playback. Written in R
 
 - Plays PSID format files (RSID/CIA-driven tunes require full C64 emulation)
 - Supports both MOS 6581 and MOS 8580 SID chip emulation
+- MOS 6502 emulation with illegal opcodes
 - PAL and NTSC timing detection from file headers
 - Multi-song files with prev/next navigation
 - **HVSC Browser** - Browse and stream directly from the High Voltage SID Collection
@@ -18,7 +19,6 @@ A TUI and command-line SID music player for C64 SID music playback. Written in R
   - Oscilloscope displaying envelope waveforms for all three voices
   - Real-time chip model switching
   - Color schemes (C64, VIC-20, C128, PET, Dracula, and more)
-- Headless mode for background playback
 - Written entirely in Rust
 
 ## Installation
