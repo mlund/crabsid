@@ -43,6 +43,37 @@ mod dracula {
     pub const YELLOW: Color = Color::Rgb(0xf1, 0xfa, 0x8c);
 }
 
+/// Monokai theme colors.
+#[allow(dead_code)]
+mod monokai {
+    use ratatui::style::Color;
+    pub const BACKGROUND: Color = Color::Rgb(0x27, 0x28, 0x22);
+    pub const FOREGROUND: Color = Color::Rgb(0xf8, 0xf8, 0xf2);
+    pub const COMMENT: Color = Color::Rgb(0x75, 0x71, 0x5e);
+    pub const RED: Color = Color::Rgb(0xf9, 0x26, 0x72);
+    pub const ORANGE: Color = Color::Rgb(0xfd, 0x97, 0x1f);
+    pub const YELLOW: Color = Color::Rgb(0xe6, 0xdb, 0x74);
+    pub const GREEN: Color = Color::Rgb(0xa6, 0xe2, 0x2e);
+    pub const CYAN: Color = Color::Rgb(0x66, 0xd9, 0xef);
+    pub const PURPLE: Color = Color::Rgb(0xae, 0x81, 0xff);
+}
+
+/// Gruvbox dark hard theme colors.
+#[allow(dead_code)]
+mod gruvbox {
+    use ratatui::style::Color;
+    pub const BG: Color = Color::Rgb(0x1d, 0x20, 0x21);
+    pub const FG: Color = Color::Rgb(0xeb, 0xdb, 0xb2);
+    pub const GRAY: Color = Color::Rgb(0x92, 0x83, 0x74);
+    pub const RED: Color = Color::Rgb(0xfb, 0x49, 0x34);
+    pub const GREEN: Color = Color::Rgb(0xb8, 0xbb, 0x26);
+    pub const YELLOW: Color = Color::Rgb(0xfa, 0xbd, 0x2f);
+    pub const BLUE: Color = Color::Rgb(0x83, 0xa5, 0x98);
+    pub const PURPLE: Color = Color::Rgb(0xd3, 0x86, 0x9b);
+    pub const AQUA: Color = Color::Rgb(0x8e, 0xc0, 0x7c);
+    pub const ORANGE: Color = Color::Rgb(0xfe, 0x80, 0x19);
+}
+
 /// Complete color scheme for TUI theming.
 /// Voice colors support up to 9 voices (3 SIDs × 3 voices).
 #[derive(Clone, Copy)]
@@ -314,6 +345,52 @@ pub const SCHEMES: &[ColorScheme] = &[
         text_secondary: dracula::COMMENT,
         highlight_bg: dracula::COMMENT,
         highlight_fg: dracula::CYAN,
+    },
+    ColorScheme {
+        name: "Monokai",
+        background: monokai::BACKGROUND,
+        voices: [
+            monokai::RED,
+            monokai::GREEN,
+            monokai::CYAN,
+            monokai::YELLOW,
+            monokai::ORANGE,
+            monokai::PURPLE,
+            monokai::FOREGROUND,
+            monokai::COMMENT,
+            monokai::RED,
+        ],
+        accent: monokai::CYAN,
+        title: monokai::RED,
+        border_focus: monokai::CYAN,
+        border_dim: monokai::COMMENT,
+        text_primary: monokai::FOREGROUND,
+        text_secondary: monokai::COMMENT,
+        highlight_bg: monokai::COMMENT,
+        highlight_fg: monokai::CYAN,
+    },
+    ColorScheme {
+        name: "Gruvbox Dark Hard",
+        background: gruvbox::BG,
+        voices: [
+            gruvbox::RED,
+            gruvbox::GREEN,
+            gruvbox::BLUE,
+            gruvbox::YELLOW,
+            gruvbox::ORANGE,
+            gruvbox::PURPLE,
+            gruvbox::AQUA,
+            gruvbox::FG,
+            gruvbox::GRAY,
+        ],
+        accent: gruvbox::AQUA,
+        title: gruvbox::YELLOW,
+        border_focus: gruvbox::AQUA,
+        border_dim: gruvbox::GRAY,
+        text_primary: gruvbox::FG,
+        text_secondary: gruvbox::GRAY,
+        highlight_bg: gruvbox::GRAY,
+        highlight_fg: gruvbox::YELLOW,
     },
 ];
 

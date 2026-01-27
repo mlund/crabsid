@@ -21,7 +21,7 @@ A TUI and command-line SID music player for C64 SID music playback. Written in R
   - VU meters showing per-voice envelope levels (3/6/9 voices)
   - Oscilloscope displaying envelope waveforms for all voices
   - Real-time chip model switching (per-SID for multi-SID tunes)
-  - Color schemes (C64, VIC-20, C128, PET, Dracula, and more)
+  - Color schemes (C64, Dracula, Monokai, Gruvbox, and more)
 - Written entirely in Rust
 
 ## Installation
