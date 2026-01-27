@@ -5,28 +5,57 @@ use mos6502::memory::Bus;
 use resid::{ChipModel, Sid};
 
 const RAM_SIZE: usize = 65536;
-const SID_BASE: u16 = 0xD400;
-const SID_END: u16 = 0xD41C;
+const SID_REGISTER_COUNT: u16 = 0x20;
 
-/// Emulated C64 memory map with SID chip at $D400-$D41C.
+/// A SID chip with its base memory address.
+pub struct SidChip {
+    pub sid: Sid,
+    pub base_address: u16,
+}
+
+impl SidChip {
+    pub fn new(chip_model: ChipModel, base_address: u16) -> Self {
+        Self {
+            sid: Sid::new(chip_model),
+            base_address,
+        }
+    }
+
+    /// Returns true if the address falls within this SID's register range.
+    fn contains(&self, addr: u16) -> bool {
+        addr >= self.base_address && addr < self.base_address + SID_REGISTER_COUNT
+    }
+}
+
+/// Emulated C64 memory map with 1-3 SID chips.
 ///
-/// Provides 64KB RAM with memory-mapped I/O for the SID sound chip.
+/// Provides 64KB RAM with memory-mapped I/O for SID sound chips.
+/// Primary SID at $D400, optional second/third at configurable addresses.
 /// All other I/O areas (VIC, CIA, etc.) are treated as plain RAM since
-/// SID playback only requires the sound chip.
+/// SID playback only requires the sound chips.
 pub struct C64Memory {
     /// 64KB RAM, heap-allocated to avoid stack overflow
     ram: Box<[u8]>,
-    /// SID sound chip mapped at $D400
-    pub sid: Sid,
+    /// SID sound chips (1-3), each at their configured address
+    pub sids: Vec<SidChip>,
 }
 
 impl C64Memory {
-    /// Creates memory with zeroed RAM and a SID chip of the specified model.
+    /// Creates memory with zeroed RAM and a single SID chip at $D400.
     pub fn new(chip_model: ChipModel) -> Self {
         Self {
             ram: vec![0; RAM_SIZE].into_boxed_slice(),
-            sid: Sid::new(chip_model),
+            sids: vec![SidChip::new(chip_model, 0xD400)],
         }
+    }
+
+    /// Configures SID chips from (base_address, chip_model) pairs.
+    /// First entry should always be $D400 for the primary SID.
+    pub fn configure_sids(&mut self, configs: &[(u16, ChipModel)]) {
+        self.sids = configs
+            .iter()
+            .map(|&(addr, model)| SidChip::new(model, addr))
+            .collect();
     }
 
     /// Loads binary data into RAM at the specified address.
@@ -41,27 +70,36 @@ impl C64Memory {
         self.ram[0x0000..0x0200].fill(0);
     }
 
-    /// Replace the SID chip with a new instance of the specified model
-    pub fn set_chip_model(&mut self, chip_model: ChipModel) {
-        self.sid = Sid::new(chip_model);
+    /// Replace the chip model for a specific SID (by index).
+    pub fn set_chip_model(&mut self, index: usize, chip_model: ChipModel) {
+        if let Some(sid_chip) = self.sids.get_mut(index) {
+            let base = sid_chip.base_address;
+            *sid_chip = SidChip::new(chip_model, base);
+        }
     }
 }
 
 impl Bus for C64Memory {
     fn get_byte(&mut self, addr: u16) -> u8 {
-        match addr {
-            // SID register range is 0x00-0x1C, fits in u8
-            #[allow(clippy::cast_possible_truncation)]
-            SID_BASE..=SID_END => self.sid.read((addr - SID_BASE) as u8),
-            _ => self.ram[addr as usize],
+        for sid_chip in &mut self.sids {
+            if sid_chip.contains(addr) {
+                #[allow(clippy::cast_possible_truncation)]
+                return sid_chip.sid.read((addr - sid_chip.base_address) as u8);
+            }
         }
+        self.ram[addr as usize]
     }
 
     fn set_byte(&mut self, addr: u16, val: u8) {
-        match addr {
-            #[allow(clippy::cast_possible_truncation)]
-            SID_BASE..=SID_END => self.sid.write((addr - SID_BASE) as u8, val),
-            _ => self.ram[addr as usize] = val,
+        for sid_chip in &mut self.sids {
+            if sid_chip.contains(addr) {
+                #[allow(clippy::cast_possible_truncation)]
+                sid_chip
+                    .sid
+                    .write((addr - sid_chip.base_address) as u8, val);
+                return;
+            }
         }
+        self.ram[addr as usize] = val;
     }
 }

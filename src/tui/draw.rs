@@ -287,10 +287,7 @@ fn sid_info_lines(app: &App) -> Vec<Line<'static>> {
         )
     };
 
-    let chip = match app.chip_model {
-        ChipModel::Mos6581 => "[6581]",
-        ChipModel::Mos8580 => "[8580]",
-    };
+    let chip_str = format_chip_models(&app.chip_models);
 
     vec![
         Line::from(vec![
@@ -318,10 +315,31 @@ fn sid_info_lines(app: &App) -> Vec<Line<'static>> {
                 Style::default().fg(scheme.accent),
             ),
             Span::styled("  ", Style::default()),
-            Span::styled(chip, Style::default().fg(scheme.text_secondary)),
+            Span::styled(chip_str, Style::default().fg(scheme.text_secondary)),
             status,
         ]),
     ]
+}
+
+/// Formats chip models for display: "[6581]", "[2x SID: 6581+8580]", etc.
+fn format_chip_models(models: &[ChipModel]) -> String {
+    let model_strs: Vec<&str> = models
+        .iter()
+        .map(|m| match m {
+            ChipModel::Mos6581 => "6581",
+            ChipModel::Mos8580 => "8580",
+        })
+        .collect();
+
+    match models.len() {
+        1 => format!("[{}]", model_strs[0]),
+        2 => format!("[2x SID: {}+{}]", model_strs[0], model_strs[1]),
+        3 => format!(
+            "[3x SID: {}+{}+{}]",
+            model_strs[0], model_strs[1], model_strs[2]
+        ),
+        _ => "[SID]".to_string(),
+    }
 }
 
 /// Returns the CrabSid logo with fixed C64 rainbow colors.
@@ -383,6 +401,7 @@ fn logo_lines() -> Vec<Line<'static>> {
 
 fn draw_vu_meters(frame: &mut Frame, area: Rect, app: &App) {
     let scheme = app.scheme();
+    let voice_count = app.vu_meter.voice_count();
 
     let block = Block::default()
         .title(" Voice Levels ")
@@ -393,58 +412,118 @@ fn draw_vu_meters(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let voice_names = ["Voice 1", "Voice 2", "Voice 3"];
-
-    let bars: Vec<Bar> = (0..3)
+    let bars: Vec<Bar> = (0..voice_count)
         .map(|i| {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let level = (app.vu_meter.levels[i] * 100.0) as u64;
+            let color_idx = i % scheme.voices.len();
             Bar::default()
                 .value(level)
-                .label(Line::from(voice_names[i]))
-                .style(Style::default().fg(scheme.voices[i]))
+                .label(Line::from(format!("{}", i + 1)))
+                .style(Style::default().fg(scheme.voices[color_idx]))
                 .value_style(Style::default().fg(scheme.text_primary).bold())
         })
         .collect();
 
+    // Adjust bar width based on voice count to fit in ~38 char inner width
+    let (bar_width, bar_gap) = match voice_count {
+        1..=3 => (8, 3), // 3*8 + 2*3 = 30
+        4..=6 => (4, 2), // 6*4 + 5*2 = 34
+        _ => (3, 1),     // 9*3 + 8*1 = 35
+    };
+
     let chart = BarChart::default()
         .data(BarGroup::default().bars(&bars))
-        .bar_width(8)
-        .bar_gap(3)
+        .bar_width(bar_width)
+        .bar_gap(bar_gap)
         .max(100)
         .direction(ratatui::layout::Direction::Vertical);
 
-    let chart_width = 3 * 8 + 2 * 3;
-    let [_, centered, _] = Layout::horizontal([
-        Constraint::Min(0),
-        Constraint::Length(chart_width),
-        Constraint::Min(0),
-    ])
-    .areas(inner);
+    // Calculate exact width needed: bars + gaps between them
+    #[allow(clippy::cast_possible_truncation)]
+    let chart_width =
+        (voice_count as u16) * bar_width + (voice_count.saturating_sub(1) as u16) * bar_gap;
 
+    // Center by offsetting x, but give chart enough width to render properly
+    let left_pad = inner.width.saturating_sub(chart_width) / 2;
+    let centered = Rect {
+        x: inner.x + left_pad,
+        y: inner.y,
+        width: inner.width - left_pad, // Don't constrain right side
+        height: inner.height,
+    };
     frame.render_widget(chart, centered);
 }
 
 fn draw_voice_scopes(frame: &mut Frame, area: Rect, app: &App) {
     let scheme = app.scheme();
-    let voice_names = ["Voice 1", "Voice 2", "Voice 3"];
+    let voice_count = app.voice_scopes.voice_count();
 
-    let areas = Layout::vertical([
-        Constraint::Ratio(1, 3),
-        Constraint::Ratio(1, 3),
-        Constraint::Ratio(1, 3),
-    ])
-    .areas::<3>(area);
+    if voice_count <= 3 {
+        draw_voice_scopes_vertical(frame, area, app, scheme);
+    } else {
+        draw_voice_scopes_grid(frame, area, app, scheme, voice_count);
+    }
+}
 
-    for (i, &voice_area) in areas.iter().enumerate() {
+/// Single SID: vertical stack of 3 scopes
+fn draw_voice_scopes_vertical(frame: &mut Frame, area: Rect, app: &App, scheme: &ColorScheme) {
+    let voice_count = app.voice_scopes.voice_count();
+    let row_constraints: Vec<Constraint> = (0..voice_count)
+        .map(|_| Constraint::Ratio(1, voice_count as u32))
+        .collect();
+    let row_areas = Layout::vertical(row_constraints).split(area);
+
+    for (i, samples) in app.voice_scopes.samples.iter().enumerate() {
+        let label = format!("Voice {}", i + 1);
+        let color_idx = i % scheme.voices.len();
         draw_single_scope(
             frame,
-            voice_area,
-            &app.voice_scopes.samples[i],
-            voice_names[i],
-            scheme.voices[i],
+            row_areas[i],
+            samples,
+            &label,
+            scheme.voices[color_idx],
             scheme.border_dim,
         );
+    }
+}
+
+/// Multi-SID: grid layout with one row per SID (3 voices per row)
+fn draw_voice_scopes_grid(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    scheme: &ColorScheme,
+    voice_count: usize,
+) {
+    let sid_count = voice_count.div_ceil(3);
+    let row_constraints: Vec<Constraint> = (0..sid_count)
+        .map(|_| Constraint::Ratio(1, sid_count as u32))
+        .collect();
+    let row_areas = Layout::vertical(row_constraints).split(area);
+
+    for (i, samples) in app.voice_scopes.samples.iter().enumerate() {
+        let row = i / 3;
+        let col = i % 3;
+        let voices_in_row = (voice_count - row * 3).min(3);
+
+        let col_constraints: Vec<Constraint> = (0..voices_in_row)
+            .map(|_| Constraint::Ratio(1, voices_in_row as u32))
+            .collect();
+        let col_areas = Layout::horizontal(col_constraints).split(row_areas[row]);
+
+        if col < col_areas.len() {
+            let label = format!("Voice {}", i + 1);
+            let color_idx = i % scheme.voices.len();
+            draw_single_scope(
+                frame,
+                col_areas[col],
+                samples,
+                &label,
+                scheme.voices[color_idx],
+                scheme.border_dim,
+            );
+        }
     }
 }
 

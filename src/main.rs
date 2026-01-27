@@ -154,6 +154,8 @@ fn create_silent_sid() -> SidFile {
         flags: 0,
         data: vec![0x60, 0x60, 0x60], // RTS instructions
         md5: String::new(),
+        second_sid_address: None,
+        third_sid_address: None,
     }
 }
 

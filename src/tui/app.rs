@@ -12,9 +12,9 @@ use resid::ChipModel;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use super::TuiConfig;
 use super::theme::{ColorScheme, DEFAULT_SCHEME, SCHEMES};
 use super::widgets::{VoiceScopes, VuMeter};
-use super::TuiConfig;
 
 /// Which browser panel has focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,7 +75,10 @@ pub struct App<'a> {
     pub current_song: u16,
     pub total_songs: u16,
     pub paused: bool,
-    pub chip_model: ChipModel,
+    /// Chip models for each SID (1-3 entries)
+    pub chip_models: Vec<ChipModel>,
+    /// Index of currently selected SID for chip switching (cycles through)
+    pub selected_sid: usize,
     pub vu_meter: VuMeter,
     pub voice_scopes: VoiceScopes,
     pub playlist_browser: PlaylistBrowser,
@@ -99,11 +102,13 @@ pub struct App<'a> {
 impl<'a> App<'a> {
     /// Creates the application with all components.
     pub fn new(config: TuiConfig<'a>) -> Self {
-        let chip_model = config
+        let chip_models = config
             .player
             .lock()
-            .map(|p| p.chip_model())
-            .unwrap_or(ChipModel::Mos6581);
+            .map(|p| p.chip_models().to_vec())
+            .unwrap_or_else(|_| vec![ChipModel::Mos6581]);
+
+        let sid_count = chip_models.len();
 
         let mut hvsc_browser = HvscBrowser::new(config.hvsc_url);
         hvsc_browser.load_stil();
@@ -120,9 +125,10 @@ impl<'a> App<'a> {
             current_song: config.song,
             total_songs: config.sid_file.songs,
             paused: false,
-            chip_model,
-            vu_meter: VuMeter::new(),
-            voice_scopes: VoiceScopes::new(),
+            chip_models,
+            selected_sid: 0,
+            vu_meter: VuMeter::with_voice_count(sid_count * 3),
+            voice_scopes: VoiceScopes::with_voice_count(sid_count * 3),
             playlist_browser: PlaylistBrowser::new(config.playlist),
             playlist_path: config.playlist_path,
             hvsc_browser,
@@ -176,10 +182,10 @@ impl<'a> App<'a> {
 
     pub fn update(&mut self) {
         let playback_error = if let Ok(mut player) = self.player.lock() {
-            self.vu_meter.update(player.voice_levels());
+            self.vu_meter.update(&player.voice_levels());
             self.voice_scopes.update(&player.envelope_samples());
             self.paused = player.is_paused();
-            self.chip_model = player.chip_model();
+            self.chip_models = player.chip_models().to_vec();
             player.take_error()
         } else {
             None
@@ -281,10 +287,34 @@ impl<'a> App<'a> {
         self.update_song_timeout(&md5, song);
     }
 
+    /// Cycles the chip model for the currently selected SID.
+    /// For multi-SID tunes, pressing 's' repeatedly cycles through all SIDs.
     pub fn switch_chip(&mut self) {
         if let Ok(mut player) = self.player.lock() {
-            player.switch_chip_model();
-            self.chip_model = player.chip_model();
+            let new_model = player.switch_chip_model(Some(self.selected_sid));
+            self.chip_models = player.chip_models().to_vec();
+
+            // Cycle to next SID for the next 's' press
+            let sid_count = player.sid_count();
+            if sid_count > 1 {
+                self.selected_sid = (self.selected_sid + 1) % sid_count;
+            }
+            drop(player);
+
+            // Show feedback for which SID was changed
+            if self.chip_models.len() > 1 {
+                let model_name = match new_model {
+                    ChipModel::Mos6581 => "6581",
+                    ChipModel::Mos8580 => "8580",
+                };
+                // selected_sid was already incremented, so previous index is the one we changed
+                let changed_idx = if self.selected_sid == 0 {
+                    self.chip_models.len()
+                } else {
+                    self.selected_sid
+                };
+                self.popup = Popup::Error(format!("SID {} -> {}", changed_idx, model_name));
+            }
         }
     }
 
@@ -414,10 +444,10 @@ impl<'a> App<'a> {
         let error = match self.player.lock() {
             Ok(mut player) => {
                 let res = player.load_sid_file(&sid_file, song);
-                let chip = player.chip_model();
                 match res {
                     Ok(_) => {
-                        self.chip_model = chip;
+                        self.chip_models = player.chip_models().to_vec();
+                        self.selected_sid = 0;
                         None
                     }
                     Err(e) => Some(format!("Skipped: {e}")),

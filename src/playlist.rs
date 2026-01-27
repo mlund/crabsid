@@ -9,6 +9,7 @@ use std::path::Path;
 /// Default songs for a new playlist.
 const DEFAULT_PLAYLIST: &[&str] = &[
     "https://hvsc.brona.dk/HVSC/C64Music/MUSICIANS/L/Lft/To_Die_For.sid",
+    "https://hvsc.brona.dk/HVSC/C64Music/MUSICIANS/M/Mitch_and_Dane/Dane/Hexadecimal_2SID.sid",
     "https://hvsc.brona.dk/HVSC/C64Music/MUSICIANS/D/Da_Blondie/Back_to_the_Roots.sid",
     "https://hvsc.brona.dk/HVSC/C64Music/MUSICIANS/0-9/20CC/van_Santen_Edwin/Spijkerhoek.sid@1",
     "https://hvsc.brona.dk/HVSC/C64Music/MUSICIANS/L/Laxity/Stinsens_Last_Night_of_89.sid@1",

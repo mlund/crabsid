@@ -24,7 +24,8 @@ const ENVELOPE_SAMPLE_DIVISOR: usize = 4;
 /// SID music player combining 6502 CPU and SID chip emulation.
 ///
 /// Executes the SID tune's play routine at the correct frame rate while
-/// generating audio samples. Supports PAL/NTSC timing and both SID chip models.
+/// generating audio samples. Supports PAL/NTSC timing, both SID chip models,
+/// and multi-SID tunes (2-3 SIDs for 6-9 voices).
 pub struct Player {
     /// 6502 CPU with C64 memory map
     cpu: CPU<C64Memory, Nmos6502>,
@@ -46,14 +47,14 @@ pub struct Player {
     frame_cycle_count: u32,
     /// Playback paused state
     paused: bool,
-    /// Per-voice envelope history for oscilloscope display
-    envelope_history: [Box<[f32; SCOPE_BUFFER_SIZE]>; 3],
+    /// Per-voice envelope history for oscilloscope display (3 per SID)
+    envelope_history: Vec<Box<[f32; SCOPE_BUFFER_SIZE]>>,
     /// Write position in envelope ring buffers
     envelope_write_pos: usize,
     /// Counter for downsampling envelope captures
     envelope_sample_counter: usize,
-    /// Currently emulated SID chip variant
-    chip_model: ChipModel,
+    /// Chip models for each SID (1-3 entries)
+    chip_models: Vec<ChipModel>,
     /// System clock frequency (PAL or NTSC)
     clock_hz: u32,
     /// Audio output sample rate
@@ -107,11 +108,16 @@ impl Player {
         chip_override: Option<u16>,
     ) -> PlayerResult<Self> {
         let (clock_hz, cycles_per_frame) = timing_from_file(sid_file);
-        let chip_model = select_chip_model(sid_file, chip_override);
+        let chip_models = select_chip_models(sid_file, chip_override);
 
-        let mut cpu = bootstrap_cpu(sid_file, chip_model, sample_rate, clock_hz, song);
+        let mut cpu = bootstrap_cpu(sid_file, &chip_models, sample_rate, clock_hz, song);
 
         run_init(&mut cpu, sid_file.init_address)?;
+
+        let voice_count = chip_models.len() * 3;
+        let envelope_history = (0..voice_count)
+            .map(|_| Box::new([0.0; SCOPE_BUFFER_SIZE]))
+            .collect();
 
         Ok(Self {
             cpu,
@@ -124,14 +130,10 @@ impl Player {
             cycle_accumulator: 0.0,
             frame_cycle_count: 0,
             paused: false,
-            envelope_history: [
-                Box::new([0.0; SCOPE_BUFFER_SIZE]),
-                Box::new([0.0; SCOPE_BUFFER_SIZE]),
-                Box::new([0.0; SCOPE_BUFFER_SIZE]),
-            ],
+            envelope_history,
             envelope_write_pos: 0,
             envelope_sample_counter: 0,
-            chip_model,
+            chip_models,
             clock_hz,
             sample_rate,
             playback_error: None,
@@ -148,6 +150,8 @@ impl Player {
             buffer.fill(0.0);
             return;
         }
+
+        let sid_count = self.cpu.memory.sids.len();
 
         for sample in buffer.iter_mut() {
             self.cycle_accumulator += self.cycles_per_sample;
@@ -166,36 +170,67 @@ impl Player {
                     }
                 }
 
-                self.cpu.memory.sid.clock();
+                // Clock all SIDs
+                for sid_chip in &mut self.cpu.memory.sids {
+                    sid_chip.sid.clock();
+                }
                 self.frame_cycle_count += 1;
             }
 
-            *sample = f32::from(self.cpu.memory.sid.output()) / 32768.0;
+            // Mix all SID outputs
+            let sum: i32 = self
+                .cpu
+                .memory
+                .sids
+                .iter()
+                .map(|s| i32::from(s.sid.output()))
+                .sum();
+            #[allow(clippy::cast_precision_loss)]
+            let mixed = (sum as f32) / (sid_count as f32) / 32768.0;
+            *sample = mixed;
 
-            // Store envelope history at reduced rate (envelopes change slower than audio)
-            self.envelope_sample_counter += 1;
-            if self.envelope_sample_counter >= ENVELOPE_SAMPLE_DIVISOR {
-                self.envelope_sample_counter = 0;
-                let state = self.cpu.memory.sid.read_state();
-                for (i, &env) in state.envelope_counter.iter().enumerate() {
-                    self.envelope_history[i][self.envelope_write_pos] = f32::from(env) / 255.0;
-                }
-                self.envelope_write_pos = (self.envelope_write_pos + 1) % SCOPE_BUFFER_SIZE;
-            }
+            self.capture_envelope_history();
         }
     }
 
-    /// Returns envelope history for each voice, ordered oldest to newest
-    pub fn envelope_samples(&self) -> [Vec<f32>; 3] {
-        if self.paused {
-            return std::array::from_fn(|_| vec![0.0; SCOPE_BUFFER_SIZE]);
+    /// Captures envelope history at reduced rate for oscilloscope display.
+    fn capture_envelope_history(&mut self) {
+        self.envelope_sample_counter += 1;
+        if self.envelope_sample_counter < ENVELOPE_SAMPLE_DIVISOR {
+            return;
         }
-        std::array::from_fn(|i| {
-            let mut samples = Vec::with_capacity(SCOPE_BUFFER_SIZE);
-            samples.extend_from_slice(&self.envelope_history[i][self.envelope_write_pos..]);
-            samples.extend_from_slice(&self.envelope_history[i][..self.envelope_write_pos]);
-            samples
-        })
+        self.envelope_sample_counter = 0;
+
+        let mut voice_idx = 0;
+        for sid_chip in &self.cpu.memory.sids {
+            let state = sid_chip.sid.read_state();
+            for &env in &state.envelope_counter {
+                if voice_idx < self.envelope_history.len() {
+                    self.envelope_history[voice_idx][self.envelope_write_pos] =
+                        f32::from(env) / 255.0;
+                }
+                voice_idx += 1;
+            }
+        }
+        self.envelope_write_pos = (self.envelope_write_pos + 1) % SCOPE_BUFFER_SIZE;
+    }
+
+    /// Returns envelope history for each voice, ordered oldest to newest.
+    /// Returns 3 entries per SID (3/6/9 voices for 1/2/3 SIDs).
+    pub fn envelope_samples(&self) -> Vec<Vec<f32>> {
+        let voice_count = self.envelope_history.len();
+        if self.paused {
+            return vec![vec![0.0; SCOPE_BUFFER_SIZE]; voice_count];
+        }
+        self.envelope_history
+            .iter()
+            .map(|history| {
+                let mut samples = Vec::with_capacity(SCOPE_BUFFER_SIZE);
+                samples.extend_from_slice(&history[self.envelope_write_pos..]);
+                samples.extend_from_slice(&history[..self.envelope_write_pos]);
+                samples
+            })
+            .collect()
     }
 
     /// Toggles between playing and paused states.
@@ -229,26 +264,25 @@ impl Player {
         self.load_address = sid_file.load_address;
         self.sid_data = sid_file.data.clone();
 
-        // Update chip model from file
-        let file_wants_8580 = (sid_file.flags >> 4) & 0x03 == 2;
-        let new_model = if file_wants_8580 {
-            ChipModel::Mos8580
-        } else {
-            ChipModel::Mos6581
-        };
-        if !matches!(
-            (&self.chip_model, &new_model),
-            (ChipModel::Mos6581, ChipModel::Mos6581) | (ChipModel::Mos8580, ChipModel::Mos8580)
-        ) {
-            self.chip_model = new_model;
-            self.cpu.memory.set_chip_model(self.chip_model);
+        // Configure SIDs from file (may be 1, 2, or 3 chips)
+        self.chip_models = select_chip_models(sid_file, None);
+        let sid_configs = build_sid_configs(sid_file, &self.chip_models);
+        self.cpu.memory.configure_sids(&sid_configs);
+
+        // Set sampling parameters for all SIDs
+        for sid_chip in &mut self.cpu.memory.sids {
+            sid_chip.sid.set_sampling_parameters(
+                SamplingMethod::Fast,
+                self.clock_hz,
+                self.sample_rate,
+            );
         }
 
-        self.cpu.memory.sid.set_sampling_parameters(
-            SamplingMethod::Fast,
-            self.clock_hz,
-            self.sample_rate,
-        );
+        // Resize envelope history for new voice count
+        let voice_count = self.chip_models.len() * 3;
+        self.envelope_history = (0..voice_count)
+            .map(|_| Box::new([0.0; SCOPE_BUFFER_SIZE]))
+            .collect();
 
         self.load_song(song)?;
         Ok(())
@@ -263,8 +297,10 @@ impl Player {
         // Reload the SID data to reset any modified memory
         self.cpu.memory.load(self.load_address, &self.sid_data);
 
-        // Reset all internal SID state (envelope counters, oscillators, filters)
-        self.cpu.memory.sid.reset();
+        // Reset all SID chips
+        for sid_chip in &mut self.cpu.memory.sids {
+            sid_chip.sid.reset();
+        }
 
         // Reset all CPU registers (not just accumulator)
         self.cpu.registers.index_x = 0;
@@ -292,34 +328,56 @@ impl Player {
         Ok(())
     }
 
-    /// Returns envelope levels (0-255) for all three SID voices.
+    /// Returns envelope levels (0-255) for all SID voices.
+    /// Returns 3 entries per SID (3/6/9 voices for 1/2/3 SIDs).
     /// Unlike hardware where only ENV3 ($D41C) is readable, emulation
     /// gives us direct access to all voice envelopes via internal state.
-    pub fn voice_levels(&self) -> [u8; 3] {
+    pub fn voice_levels(&self) -> Vec<u8> {
+        let voice_count = self.cpu.memory.sids.len() * 3;
         if self.paused {
-            return [0; 3];
+            return vec![0; voice_count];
         }
-        let state = self.cpu.memory.sid.read_state();
-        state.envelope_counter
+        self.cpu
+            .memory
+            .sids
+            .iter()
+            .flat_map(|s| s.sid.read_state().envelope_counter)
+            .collect()
     }
 
-    /// Returns the currently emulated SID chip model.
-    pub const fn chip_model(&self) -> ChipModel {
-        self.chip_model
+    /// Returns the chip models for all SIDs.
+    pub fn chip_models(&self) -> &[ChipModel] {
+        &self.chip_models
     }
 
-    /// Toggle between MOS 6581 and MOS 8580 chip emulation
-    pub fn switch_chip_model(&mut self) {
+    /// Returns the number of SID chips.
+    pub fn sid_count(&self) -> usize {
+        self.chip_models.len()
+    }
+
+    /// Cycles the chip model for the specified SID (or first if index is None).
+    /// Returns the new model for that SID.
+    pub fn switch_chip_model(&mut self, sid_index: Option<usize>) -> ChipModel {
+        let idx = sid_index.unwrap_or(0);
+        if idx >= self.chip_models.len() {
+            return self
+                .chip_models
+                .first()
+                .copied()
+                .unwrap_or(ChipModel::Mos6581);
+        }
+
         // Save current register state before replacing the chip
-        let state = self.cpu.memory.sid.read_state();
+        let state = self.cpu.memory.sids[idx].sid.read_state();
 
-        self.chip_model = match self.chip_model {
+        let new_model = match self.chip_models[idx] {
             ChipModel::Mos6581 => ChipModel::Mos8580,
             ChipModel::Mos8580 => ChipModel::Mos6581,
         };
+        self.chip_models[idx] = new_model;
 
-        self.cpu.memory.set_chip_model(self.chip_model);
-        self.cpu.memory.sid.set_sampling_parameters(
+        self.cpu.memory.set_chip_model(idx, new_model);
+        self.cpu.memory.sids[idx].sid.set_sampling_parameters(
             SamplingMethod::Fast,
             self.clock_hz,
             self.sample_rate,
@@ -328,8 +386,10 @@ impl Player {
         // Restore writable registers (0x00-0x18) to maintain playback
         for (reg, &val) in state.sid_register[..0x19].iter().enumerate() {
             #[allow(clippy::cast_possible_truncation)]
-            self.cpu.memory.sid.write(reg as u8, val);
+            self.cpu.memory.sids[idx].sid.write(reg as u8, val);
         }
+
+        new_model
     }
 
     fn call_play(&mut self) -> PlayerResult<()> {
@@ -363,25 +423,73 @@ fn timing_from_file(sid_file: &SidFile) -> (u32, u32) {
     (clock_hz, cycles_per_frame)
 }
 
-fn select_chip_model(sid_file: &SidFile, chip_override: Option<u16>) -> ChipModel {
-    match chip_override {
-        Some(8580) => ChipModel::Mos8580,
-        None if (sid_file.flags >> 4) & 0x03 == 2 => ChipModel::Mos8580,
-        Some(_) | None => ChipModel::Mos6581,
+/// Selects chip models for all SIDs in the file.
+fn select_chip_models(sid_file: &SidFile, chip_override: Option<u16>) -> Vec<ChipModel> {
+    let sid_count = sid_file.sid_count();
+    (0..sid_count)
+        .map(|i| select_chip_model_for_sid(sid_file, i, chip_override))
+        .collect()
+}
+
+fn select_chip_model_for_sid(
+    sid_file: &SidFile,
+    sid_index: usize,
+    chip_override: Option<u16>,
+) -> ChipModel {
+    if let Some(override_val) = chip_override {
+        return if override_val == 8580 {
+            ChipModel::Mos8580
+        } else {
+            ChipModel::Mos6581
+        };
     }
+
+    // Check file's preference for this SID (bits 4-5 for SID1, 6-7 for SID2, 8-9 for SID3)
+    match sid_file.chip_model_for_sid(sid_index) {
+        Some(2) => ChipModel::Mos8580,
+        _ => ChipModel::Mos6581,
+    }
+}
+
+/// Builds SID configuration pairs (address, model) from file metadata.
+fn build_sid_configs(sid_file: &SidFile, chip_models: &[ChipModel]) -> Vec<(u16, ChipModel)> {
+    let mut configs = vec![(0xD400, chip_models[0])];
+
+    if let Some(addr) = sid_file.second_sid_address
+        && chip_models.len() > 1
+    {
+        configs.push((addr, chip_models[1]));
+    }
+
+    if let Some(addr) = sid_file.third_sid_address
+        && chip_models.len() > 2
+    {
+        configs.push((addr, chip_models[2]));
+    }
+
+    configs
 }
 
 fn bootstrap_cpu(
     sid_file: &SidFile,
-    chip_model: ChipModel,
+    chip_models: &[ChipModel],
     sample_rate: u32,
     clock_hz: u32,
     song: u16,
 ) -> CPU<C64Memory, Nmos6502> {
-    let mut memory = C64Memory::new(chip_model);
-    memory
-        .sid
-        .set_sampling_parameters(SamplingMethod::Fast, clock_hz, sample_rate);
+    let mut memory = C64Memory::new(chip_models[0]);
+
+    // Configure all SIDs
+    let sid_configs = build_sid_configs(sid_file, chip_models);
+    memory.configure_sids(&sid_configs);
+
+    // Set sampling parameters for all SIDs
+    for sid_chip in &mut memory.sids {
+        sid_chip
+            .sid
+            .set_sampling_parameters(SamplingMethod::Fast, clock_hz, sample_rate);
+    }
+
     memory.load(sid_file.load_address, &sid_file.data);
 
     let mut cpu = CPU::new(memory, Nmos6502);
@@ -480,29 +588,45 @@ mod tests {
         };
     }
 
-    fn dummy_sid() -> SidFile {
-        SidFile {
-            magic: "PSID".to_string(),
-            version: 2,
-            data_offset: 0x7c,
-            load_address: 0x1000,
-            init_address: 0x1000,
-            play_address: 0x1003,
-            songs: 1,
-            start_song: 1,
-            speed: 0,
-            name: String::new(),
-            author: String::new(),
-            released: String::new(),
-            flags: 0,
-            data: vec![0x60, 0x60, 0x60],
-            md5: String::new(),
-        }
+    macro_rules! first_sid {
+        ($player:expr) => {
+            &$player.cpu.memory.sids[0].sid
+        };
+    }
+
+    macro_rules! first_sid_mut {
+        ($player:expr) => {
+            &mut $player.cpu.memory.sids[0].sid
+        };
+    }
+
+    macro_rules! test_sid {
+        () => {
+            SidFile {
+                magic: "PSID".to_string(),
+                version: 2,
+                data_offset: 0x7c,
+                load_address: 0x1000,
+                init_address: 0x1000,
+                play_address: 0x1003,
+                songs: 1,
+                start_song: 1,
+                speed: 0,
+                name: String::new(),
+                author: String::new(),
+                released: String::new(),
+                flags: 0,
+                data: vec![0x60, 0x60, 0x60],
+                md5: String::new(),
+                second_sid_address: None,
+                third_sid_address: None,
+            }
+        };
     }
 
     #[test]
     fn envelope_samples_rotate_oldest_first() {
-        let sid = dummy_sid();
+        let sid = test_sid!();
         let mut player = Player::new(&sid, 1, 44_100, None).expect("player init");
 
         fill_history!(player, 0, 0.0);
@@ -520,16 +644,16 @@ mod tests {
 
     #[test]
     fn switch_chip_preserves_sid_registers() {
-        let sid = dummy_sid();
+        let sid = test_sid!();
         let mut player = Player::new(&sid, 1, 44_100, None).expect("player init");
 
         for reg in 0..=0x18 {
-            player.cpu.memory.sid.write(reg, reg as u8);
+            first_sid_mut!(player).write(reg, reg as u8);
         }
-        let before = player.cpu.memory.sid.read_state();
+        let before = first_sid!(player).read_state();
 
-        player.switch_chip_model();
-        let after = player.cpu.memory.sid.read_state();
+        player.switch_chip_model(None);
+        let after = first_sid!(player).read_state();
 
         assert_sid_registers_eq!(before, after, 0..=0x18);
     }

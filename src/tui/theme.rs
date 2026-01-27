@@ -44,11 +44,13 @@ mod dracula {
 }
 
 /// Complete color scheme for TUI theming.
+/// Voice colors support up to 9 voices (3 SIDs × 3 voices).
 #[derive(Clone, Copy)]
 pub struct ColorScheme {
     pub name: &'static str,
     pub background: Color,
-    pub voices: [Color; 3],
+    /// Colors for up to 9 voices (3 per SID chip)
+    pub voices: [Color; 9],
     pub accent: Color,
     pub title: Color,
     pub border_focus: Color,
@@ -63,7 +65,17 @@ pub const SCHEMES: &[ColorScheme] = &[
     ColorScheme {
         name: "Dark Primary",
         background: c64::BLACK,
-        voices: [c64::RED, c64::GREEN, c64::BLUE],
+        voices: [
+            c64::RED,
+            c64::GREEN,
+            c64::BLUE, // SID 1
+            c64::LIGHT_RED,
+            c64::LIGHT_GREEN,
+            c64::LIGHT_BLUE, // SID 2
+            c64::ORANGE,
+            c64::CYAN,
+            c64::PURPLE, // SID 3
+        ],
         accent: c64::CYAN,
         title: c64::LIGHT_BLUE,
         border_focus: c64::CYAN,
@@ -76,7 +88,17 @@ pub const SCHEMES: &[ColorScheme] = &[
     ColorScheme {
         name: "Warm",
         background: c64::BLACK,
-        voices: [c64::ORANGE, c64::YELLOW, c64::BROWN],
+        voices: [
+            c64::ORANGE,
+            c64::YELLOW,
+            c64::BROWN,
+            c64::LIGHT_RED,
+            c64::LIGHT_GREEN,
+            c64::CYAN,
+            c64::PURPLE,
+            c64::LIGHT_BLUE,
+            c64::WHITE,
+        ],
         accent: c64::YELLOW,
         title: c64::ORANGE,
         border_focus: c64::YELLOW,
@@ -89,7 +111,17 @@ pub const SCHEMES: &[ColorScheme] = &[
     ColorScheme {
         name: "Cool",
         background: c64::BLACK,
-        voices: [c64::PURPLE, c64::CYAN, c64::LIGHT_BLUE],
+        voices: [
+            c64::PURPLE,
+            c64::CYAN,
+            c64::LIGHT_BLUE,
+            c64::LIGHT_GREEN,
+            c64::LIGHT_RED,
+            c64::YELLOW,
+            c64::WHITE,
+            c64::ORANGE,
+            c64::GREEN,
+        ],
         accent: c64::CYAN,
         title: c64::PURPLE,
         border_focus: c64::CYAN,
@@ -102,7 +134,17 @@ pub const SCHEMES: &[ColorScheme] = &[
     ColorScheme {
         name: "Monochrome",
         background: c64::BLACK,
-        voices: [c64::LIGHT_GREY, c64::GREY, c64::WHITE],
+        voices: [
+            c64::LIGHT_GREY,
+            c64::GREY,
+            c64::WHITE,
+            c64::LIGHT_GREY,
+            c64::GREY,
+            c64::WHITE,
+            c64::LIGHT_GREY,
+            c64::GREY,
+            c64::WHITE,
+        ],
         accent: c64::GREEN,
         title: c64::GREEN,
         border_focus: c64::GREEN,
@@ -115,7 +157,17 @@ pub const SCHEMES: &[ColorScheme] = &[
     ColorScheme {
         name: "Neon",
         background: c64::BLACK,
-        voices: [c64::LIGHT_RED, c64::LIGHT_GREEN, c64::LIGHT_BLUE],
+        voices: [
+            c64::LIGHT_RED,
+            c64::LIGHT_GREEN,
+            c64::LIGHT_BLUE,
+            c64::YELLOW,
+            c64::CYAN,
+            c64::PURPLE,
+            c64::ORANGE,
+            c64::WHITE,
+            c64::GREEN,
+        ],
         accent: c64::CYAN,
         title: c64::YELLOW,
         border_focus: c64::PURPLE,
@@ -128,7 +180,17 @@ pub const SCHEMES: &[ColorScheme] = &[
     ColorScheme {
         name: "C64",
         background: c64::BLUE,
-        voices: [c64::LIGHT_BLUE, c64::CYAN, c64::WHITE],
+        voices: [
+            c64::LIGHT_BLUE,
+            c64::CYAN,
+            c64::WHITE,
+            c64::LIGHT_GREEN,
+            c64::YELLOW,
+            c64::ORANGE,
+            c64::LIGHT_RED,
+            c64::PURPLE,
+            c64::GREEN,
+        ],
         accent: c64::LIGHT_BLUE,
         title: c64::CYAN,
         border_focus: c64::LIGHT_BLUE,
@@ -141,7 +203,17 @@ pub const SCHEMES: &[ColorScheme] = &[
     ColorScheme {
         name: "Frost",
         background: c64::BLUE,
-        voices: [c64::WHITE, c64::LIGHT_GREY, c64::CYAN],
+        voices: [
+            c64::WHITE,
+            c64::LIGHT_GREY,
+            c64::CYAN,
+            c64::LIGHT_BLUE,
+            c64::LIGHT_GREEN,
+            c64::YELLOW,
+            c64::PURPLE,
+            c64::ORANGE,
+            c64::LIGHT_RED,
+        ],
         accent: c64::WHITE,
         title: c64::WHITE,
         border_focus: c64::LIGHT_GREY,
@@ -154,7 +226,17 @@ pub const SCHEMES: &[ColorScheme] = &[
     ColorScheme {
         name: "VIC-20",
         background: c64::CYAN,
-        voices: [c64::BLUE, c64::PURPLE, c64::RED],
+        voices: [
+            c64::BLUE,
+            c64::PURPLE,
+            c64::RED,
+            c64::GREEN,
+            c64::YELLOW,
+            c64::ORANGE,
+            c64::LIGHT_BLUE,
+            c64::WHITE,
+            c64::LIGHT_RED,
+        ],
         accent: c64::BLUE,
         title: c64::BLUE,
         border_focus: c64::BLUE,
@@ -167,7 +249,17 @@ pub const SCHEMES: &[ColorScheme] = &[
     ColorScheme {
         name: "C128",
         background: c64::DARK_GREY,
-        voices: [c64::LIGHT_GREEN, c64::GREEN, c64::CYAN],
+        voices: [
+            c64::LIGHT_GREEN,
+            c64::GREEN,
+            c64::CYAN,
+            c64::LIGHT_BLUE,
+            c64::YELLOW,
+            c64::ORANGE,
+            c64::LIGHT_RED,
+            c64::PURPLE,
+            c64::WHITE,
+        ],
         accent: c64::LIGHT_GREEN,
         title: c64::LIGHT_GREEN,
         border_focus: c64::LIGHT_GREEN,
@@ -180,7 +272,17 @@ pub const SCHEMES: &[ColorScheme] = &[
     ColorScheme {
         name: "PET",
         background: c64::BLACK,
-        voices: [c64::GREEN, c64::GREEN, c64::GREEN],
+        voices: [
+            c64::GREEN,
+            c64::GREEN,
+            c64::GREEN,
+            c64::GREEN,
+            c64::GREEN,
+            c64::GREEN,
+            c64::GREEN,
+            c64::GREEN,
+            c64::GREEN,
+        ],
         accent: c64::GREEN,
         title: c64::GREEN,
         border_focus: c64::GREEN,
@@ -193,7 +295,17 @@ pub const SCHEMES: &[ColorScheme] = &[
     ColorScheme {
         name: "Dracula",
         background: dracula::BACKGROUND,
-        voices: [dracula::PINK, dracula::CYAN, dracula::GREEN],
+        voices: [
+            dracula::PINK,
+            dracula::CYAN,
+            dracula::GREEN,
+            dracula::YELLOW,
+            dracula::ORANGE,
+            dracula::PURPLE,
+            dracula::RED,
+            dracula::FOREGROUND,
+            dracula::COMMENT,
+        ],
         accent: dracula::PURPLE,
         title: dracula::PINK,
         border_focus: dracula::PURPLE,

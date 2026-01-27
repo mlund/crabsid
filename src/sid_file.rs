@@ -20,6 +20,8 @@ const OFFSET_NAME: usize = 0x16;
 const OFFSET_AUTHOR: usize = 0x36;
 const OFFSET_RELEASED: usize = 0x56;
 const OFFSET_FLAGS: usize = 0x76;
+const OFFSET_SECOND_SID: usize = 0x7A;
+const OFFSET_THIRD_SID: usize = 0x7B;
 
 /// Parsed PSID/RSID file containing a C64 SID tune.
 ///
@@ -60,6 +62,10 @@ pub struct SidFile {
     pub data: Vec<u8>,
     /// MD5 hash of original file (for Songlengths lookup)
     pub md5: String,
+    /// v3+ second SID address (e.g., $D420, $D500)
+    pub second_sid_address: Option<u16>,
+    /// v3+ third SID address
+    pub third_sid_address: Option<u16>,
 }
 
 impl SidFile {
@@ -105,6 +111,17 @@ impl SidFile {
             0
         };
 
+        // v3+ multi-SID addresses (byte encodes high nybble of $Dxx0)
+        let (second_sid_address, third_sid_address) =
+            if version >= 3 && bytes.len() > OFFSET_THIRD_SID {
+                (
+                    parse_sid_address(bytes[OFFSET_SECOND_SID]),
+                    parse_sid_address(bytes[OFFSET_THIRD_SID]),
+                )
+            } else {
+                (None, None)
+            };
+
         let data_start = data_offset as usize;
         if data_start > bytes.len() {
             return Err(io::Error::new(
@@ -138,6 +155,8 @@ impl SidFile {
             flags,
             data,
             md5,
+            second_sid_address,
+            third_sid_address,
         })
     }
 
@@ -173,6 +192,27 @@ impl SidFile {
     pub fn requires_full_emulation(&self) -> bool {
         self.magic == "RSID" || self.play_address == 0 || self.speed != 0
     }
+
+    /// Returns the number of SID chips used (1, 2, or 3).
+    pub const fn sid_count(&self) -> usize {
+        match (self.second_sid_address, self.third_sid_address) {
+            (Some(_), Some(_)) => 3,
+            (Some(_), None) => 2,
+            _ => 1,
+        }
+    }
+
+    /// Returns the preferred chip model for the nth SID (0-indexed).
+    /// Bits 4-5 of flags: first SID, bits 6-7: second SID, bits 8-9: third SID.
+    pub fn chip_model_for_sid(&self, index: usize) -> Option<u8> {
+        if self.version < 2 {
+            return None;
+        }
+        let shift = 4 + index * 2;
+        let model = (self.flags >> shift) & 0x03;
+        // 0=unknown, 1=6581, 2=8580, 3=6581+8580
+        if model == 0 { None } else { Some(model as u8) }
+    }
 }
 
 fn read_u16_be(bytes: &[u8]) -> u16 {
@@ -181,6 +221,16 @@ fn read_u16_be(bytes: &[u8]) -> u16 {
 
 fn read_u32_be(bytes: &[u8]) -> u32 {
     u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+}
+
+/// Parses v3+ SID address byte: 0x42 -> $D420, 0x00 -> None.
+/// The byte encodes (address - $D000) >> 4, so 0x42 means $D420.
+fn parse_sid_address(byte: u8) -> Option<u16> {
+    if byte == 0 {
+        None
+    } else {
+        Some(0xD000 | (u16::from(byte) << 4))
+    }
 }
 
 /// Reads a null-terminated Latin-1 string (ISO-8859-1, used in SID headers).
@@ -192,4 +242,82 @@ fn read_string(bytes: &[u8]) -> String {
         .collect::<String>()
         .trim()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    macro_rules! test_sid {
+        () => {
+            SidFile {
+                magic: "PSID".to_string(),
+                version: 3,
+                data_offset: 0x7c,
+                load_address: 0x1000,
+                init_address: 0x1000,
+                play_address: 0x1003,
+                songs: 1,
+                start_song: 1,
+                speed: 0,
+                name: String::new(),
+                author: String::new(),
+                released: String::new(),
+                flags: 0,
+                data: vec![],
+                md5: String::new(),
+                second_sid_address: None,
+                third_sid_address: None,
+            }
+        };
+    }
+
+    #[test]
+    fn parse_sid_address_none_for_zero() {
+        assert_eq!(parse_sid_address(0x00), None);
+    }
+
+    #[test]
+    fn parse_sid_address_d420() {
+        assert_eq!(parse_sid_address(0x42), Some(0xD420));
+    }
+
+    #[test]
+    fn parse_sid_address_d500() {
+        assert_eq!(parse_sid_address(0x50), Some(0xD500));
+    }
+
+    #[test]
+    fn parse_real_2sid_file() {
+        let sid = SidFile::load("tests/Hexadecimal_2SID.sid").expect("load 2SID file");
+        assert_eq!(sid.name, "Hexadecimal");
+        assert_eq!(sid.version, 3);
+        assert_eq!(sid.sid_count(), 2);
+        assert_eq!(sid.second_sid_address, Some(0xD500));
+        assert_eq!(sid.third_sid_address, None);
+        // Both SIDs request 8580 (model bits = 2)
+        assert_eq!(sid.chip_model_for_sid(0), Some(2));
+        assert_eq!(sid.chip_model_for_sid(1), Some(2));
+    }
+
+    #[test]
+    fn sid_count_single() {
+        let sid = test_sid!();
+        assert_eq!(sid.sid_count(), 1);
+    }
+
+    #[test]
+    fn sid_count_dual() {
+        let mut sid = test_sid!();
+        sid.second_sid_address = Some(0xD420);
+        assert_eq!(sid.sid_count(), 2);
+    }
+
+    #[test]
+    fn sid_count_triple() {
+        let mut sid = test_sid!();
+        sid.second_sid_address = Some(0xD420);
+        sid.third_sid_address = Some(0xD500);
+        assert_eq!(sid.sid_count(), 3);
+    }
 }

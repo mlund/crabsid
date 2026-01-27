@@ -1,12 +1,13 @@
 # CrabSID
 
-A TUI and command-line SID music player for C64 SID music playback. Written in Rust and emulates the MOS 6502 CPU and MOS 6581/8580 SID chip using ReSid.
+A TUI and command-line SID music player for C64 SID music playback. Written in Rust and emulates the MOS 6502 CPU and MOS 6581/8580 SID chip using ReSid. Supports multi-SID tunes with 2-3 chips for 6-9 voice playback.
 
 <img width="1063" height="422" alt="Image" src="https://github.com/user-attachments/assets/6dd6817b-a4c2-431a-a481-d107a0ef826d" />
 
 ## Features
 
 - Plays PSID format files (RSID/CIA-driven tunes require full C64 emulation)
+- **Multi-SID support** - 2SID and 3SID tunes (PSID v3+) with 6-9 voices
 - Supports both MOS 6581 and MOS 8580 SID chip emulation
 - MOS 6502 emulation with illegal opcodes
 - PAL and NTSC timing detection from file headers
@@ -17,9 +18,9 @@ A TUI and command-line SID music player for C64 SID music playback. Written in R
 - **Local HVSC** - Use a local HVSC copy with `file://` URLs for offline playback
 - **Playlist support** - M3U playlists with local files and URLs
 - Terminal UI with:
-  - VU meters showing per-voice envelope levels
-  - Oscilloscope displaying envelope waveforms for all three voices
-  - Real-time chip model switching
+  - VU meters showing per-voice envelope levels (3/6/9 voices)
+  - Oscilloscope displaying envelope waveforms for all voices
+  - Real-time chip model switching (per-SID for multi-SID tunes)
   - Color schemes (C64, VIC-20, C128, PET, Dracula, and more)
 - Written entirely in Rust
 
@@ -56,7 +57,7 @@ crabsid --hvsc-url file:///path/to/HVSC/C64Music  # Use local HVSC
 | `Space` | Pause/Resume |
 | `1-9` | Jump to subsong 1-9 |
 | `+/-` | Next/previous subsong |
-| `s` | Switch SID chip (6581/8580) |
+| `s` | Cycle SID chip model (6581/8580) |
 | `c` | Color scheme picker |
 | `a` | Add current song to playlist |
 
@@ -100,7 +101,7 @@ flowchart TB
     subgraph Core["Emulation Core"]
         CPU[MOS 6502 CPU<br/>mos6502]
         MEM[C64 Memory<br/>64KB RAM]
-        SIDCHIP[SID Chip<br/>resid-rs]
+        SIDCHIP[SID Chips 1-3<br/>resid-rs]
         CPU <--> MEM
         MEM <--> SIDCHIP
     end
