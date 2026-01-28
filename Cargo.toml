@@ -20,6 +20,8 @@ crossterm = "0.29"
 ureq = "3"
 dirs = "6"
 md-5 = "0.10"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
 
 [profile.release]
 strip = true     # Automatically strip symbols from the binary.

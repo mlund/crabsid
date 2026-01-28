@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use super::TuiConfig;
-use super::theme::{ColorScheme, DEFAULT_SCHEME, SCHEMES};
+use super::theme::{ColorScheme, SCHEMES};
 use super::widgets::{VoiceScopes, VuMeter};
 
 /// Which browser panel has focus.
@@ -137,7 +137,7 @@ impl<'a> App<'a> {
             current_source: None,
             popup: Popup::None,
             playlist_modified: config.playlist_modified,
-            color_scheme: DEFAULT_SCHEME,
+            color_scheme: config.color_scheme.min(SCHEMES.len().saturating_sub(1)),
             hvsc_search: None,
             hvsc_search_results: Vec::new(),
             hvsc_search_index: 0,

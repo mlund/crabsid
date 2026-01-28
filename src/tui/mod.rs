@@ -39,10 +39,11 @@ pub struct TuiConfig<'a> {
     pub playlist_modified: bool,
     pub hvsc_url: &'a str,
     pub playtime_secs: u64,
+    pub color_scheme: usize,
 }
 
-/// Main entry point for the TUI.
-pub fn run_tui(config: TuiConfig) -> io::Result<()> {
+/// Main entry point for the TUI. Returns the final color scheme index.
+pub fn run_tui(config: TuiConfig) -> io::Result<usize> {
     stdout().execute(EnterAlternateScreen)?;
     enable_raw_mode()?;
 
@@ -56,7 +57,7 @@ pub fn run_tui(config: TuiConfig) -> io::Result<()> {
     result
 }
 
-fn run_app(mut terminal: DefaultTerminal, mut app: App) -> io::Result<()> {
+fn run_app(mut terminal: DefaultTerminal, mut app: App) -> io::Result<usize> {
     let frame_duration = Duration::from_millis(1000 / TARGET_FPS);
 
     loop {
@@ -73,7 +74,8 @@ fn run_app(mut terminal: DefaultTerminal, mut app: App) -> io::Result<()> {
             && key.kind == KeyEventKind::Press
             && let Some(action) = handle_key(&mut app, key.code)
         {
-            return action;
+            action?;
+            return Ok(app.color_scheme);
         }
     }
 }

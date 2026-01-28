@@ -5,6 +5,7 @@
 
 #![deny(missing_docs)]
 
+mod config;
 mod hvsc;
 mod memory;
 mod player;
@@ -13,6 +14,7 @@ mod sid_file;
 mod tui;
 
 use clap::Parser;
+use config::Config;
 use player::create_shared_player;
 use playlist::Playlist;
 use sid_file::SidFile;
@@ -118,8 +120,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.no_tui {
         run_simple(&sid_file, initial_song)?;
     } else {
+        let mut user_config = Config::load();
         let focus_hvsc = args.files.is_empty() && playlist.is_empty();
-        let config = tui::TuiConfig {
+        let tui_config = tui::TuiConfig {
             player,
             sid_file: &sid_file,
             song: initial_song,
@@ -129,8 +132,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             playlist_modified,
             hvsc_url: &args.hvsc_url,
             playtime_secs: args.playtime,
+            color_scheme: user_config.color_scheme,
         };
-        tui::run_tui(config)?;
+        let final_color_scheme = tui::run_tui(tui_config)?;
+        user_config.color_scheme = final_color_scheme;
+        user_config.save();
     }
 
     Ok(())

@@ -393,5 +393,3 @@ pub const SCHEMES: &[ColorScheme] = &[
         highlight_fg: gruvbox::YELLOW,
     },
 ];
-
-pub const DEFAULT_SCHEME: usize = 10; // Dracula
