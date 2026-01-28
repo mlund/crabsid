@@ -12,6 +12,9 @@ const ATTACK_RATE: f32 = 0.7;
 const DECAY_RATE: f32 = 0.92;
 const PEAK_HOLD_MS: u128 = 500;
 
+/// Blend factor for oscilloscope persistence (0.0 = instant, 1.0 = frozen)
+const SCOPE_PERSISTENCE: f32 = 0.5;
+
 /// VU meter state with smoothed decay for visual appeal.
 /// Supports dynamic voice count (3/6/9 for 1/2/3 SIDs).
 pub struct VuMeter {
@@ -89,7 +92,7 @@ impl VoiceScopes {
     }
 
     /// Downsample from player envelope buffers to display resolution.
-    /// Resizes internal storage if voice count changes.
+    /// Applies persistence smoothing for easier reading.
     pub fn update(&mut self, raw_samples: &[Vec<f32>]) {
         self.resize_if_needed(raw_samples.len());
 
@@ -102,7 +105,9 @@ impl VoiceScopes {
                 continue;
             }
             for (i, sample) in display.iter_mut().enumerate() {
-                *sample = raw.get(i * step).copied().unwrap_or(0.0);
+                let new_val = raw.get(i * step).copied().unwrap_or(0.0);
+                // Blend old and new for persistence effect
+                *sample = sample.mul_add(SCOPE_PERSISTENCE, new_val * (1.0 - SCOPE_PERSISTENCE));
             }
         }
     }
