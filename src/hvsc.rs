@@ -5,8 +5,9 @@
 
 use crate::sid_file::SidFile;
 use std::collections::HashMap;
+use std::fs;
 use std::io::{self, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Fetches bytes from a URL (http/https) or local path (file://).
 fn fetch_bytes(url: &str) -> io::Result<Vec<u8>> {
@@ -37,6 +38,57 @@ fn fetch_text(url: &str) -> io::Result<String> {
 /// Default HVSC mirror URL.
 pub const DEFAULT_HVSC_URL: &str = "https://hvsc.brona.dk/HVSC/C64Music";
 
+/// Returns the cache directory for crabsid, creating it if needed.
+fn cache_dir() -> Option<PathBuf> {
+    let dir = dirs::cache_dir()?.join("crabsid");
+    fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
+/// Clears the HVSC cache files (STIL.txt and Songlengths.md5).
+pub fn clear_cache() {
+    if let Some(dir) = cache_dir() {
+        let _ = fs::remove_file(dir.join("STIL.txt"));
+        let _ = fs::remove_file(dir.join("Songlengths.md5"));
+    }
+}
+
+/// Reads a file as Latin-1 or UTF-8.
+fn read_file(path: &Path, latin1: bool) -> io::Result<String> {
+    if latin1 {
+        let bytes = fs::read(path)?;
+        Ok(bytes.iter().map(|&b| b as char).collect())
+    } else {
+        fs::read_to_string(path)
+    }
+}
+
+/// Reads cached file if present, otherwise fetches from URL and caches result.
+fn fetch_with_cache(url: &str, cache_name: &str, latin1: bool) -> io::Result<String> {
+    let cache_path = cache_dir().map(|d| d.join(cache_name));
+
+    // Try cache first
+    if let Some(ref path) = cache_path {
+        if path.exists() {
+            return read_file(path, latin1);
+        }
+    }
+
+    // Fetch from URL
+    let content = if latin1 {
+        fetch_latin1_text(url)?
+    } else {
+        fetch_text(url)?
+    };
+
+    // Best-effort caching
+    if let Some(path) = cache_path {
+        let _ = fs::write(&path, &content);
+    }
+
+    Ok(content)
+}
+
 /// Metadata for a SID file from STIL.
 #[derive(Debug, Clone, Default)]
 pub struct StilEntry {
@@ -52,10 +104,10 @@ pub struct StilDatabase {
 }
 
 impl StilDatabase {
-    /// Fetches and parses the STIL file from HVSC.
+    /// Fetches and parses the STIL file from HVSC, using cache if available.
     pub fn fetch(base_url: &str) -> io::Result<Self> {
         let url = format!("{base_url}/DOCUMENTS/STIL.txt");
-        let content = fetch_latin1_text(&url)?;
+        let content = fetch_with_cache(&url, "STIL.txt", true)?;
         Ok(Self::parse(&content))
     }
 
@@ -139,10 +191,10 @@ pub struct SonglengthsDatabase {
 }
 
 impl SonglengthsDatabase {
-    /// Fetches and parses the Songlengths.md5 file from HVSC.
+    /// Fetches and parses the Songlengths.md5 file from HVSC, using cache if available.
     pub fn fetch(base_url: &str) -> io::Result<Self> {
         let url = format!("{base_url}/DOCUMENTS/Songlengths.md5");
-        let content = fetch_text(&url)?;
+        let content = fetch_with_cache(&url, "Songlengths.md5", false)?;
         Ok(Self::parse(&content))
     }
 
@@ -283,7 +335,7 @@ impl HvscBrowser {
         }
     }
 
-    /// Fetches the STIL and Songlengths databases.
+    /// Fetches the STIL and Songlengths databases (from cache if available).
     pub fn load_stil(&mut self) {
         match StilDatabase::fetch(&self.base_url) {
             Ok(db) => self.stil = Some(db),
@@ -293,6 +345,15 @@ impl HvscBrowser {
         if let Ok(db) = SonglengthsDatabase::fetch(&self.base_url) {
             self.songlengths = Some(db);
         }
+    }
+
+    /// Clears the HVSC cache and reloads STIL and Songlengths databases.
+    pub fn refresh_cache(&mut self) {
+        clear_cache();
+        self.stil = None;
+        self.stil_error = None;
+        self.songlengths = None;
+        self.load_stil();
     }
 
     /// Returns STIL info for the selected entry if available.

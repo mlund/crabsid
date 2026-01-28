@@ -40,6 +40,7 @@ pub fn handle_key(app: &mut App, key: KeyCode) -> Option<io::Result<()>> {
         KeyCode::Char('s') => app.switch_chip(),
         KeyCode::Char('c') => app.open_color_picker(),
         KeyCode::Char('h' | '?') => app.show_help(),
+        KeyCode::Char('r') => app.refresh_hvsc_cache(),
         KeyCode::Tab => app.toggle_browser_focus(),
         KeyCode::Char('/') => app.start_hvsc_search(),
 

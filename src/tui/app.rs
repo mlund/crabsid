@@ -487,7 +487,11 @@ impl<'a> App<'a> {
         }
     }
 
-    // HVSC search methods
+    // HVSC methods
+    pub fn refresh_hvsc_cache(&mut self) {
+        self.hvsc_browser.refresh_cache();
+    }
+
     pub fn start_hvsc_search(&mut self) {
         if self.browser_focus == BrowserFocus::Hvsc {
             self.hvsc_search = Some(String::new());

@@ -687,7 +687,7 @@ fn draw_popup(frame: &mut Frame, app: &App) {
     };
 
     let area = if small {
-        centered_rect(40, 35, frame.area())
+        centered_rect(45, 45, frame.area())
     } else {
         centered_rect(60, 70, frame.area())
     };
@@ -733,6 +733,7 @@ fn help_text(scheme: &ColorScheme) -> Vec<Line<'static>> {
         row!("s", "6581/8580", "/", "Search STIL"),
         row!("c", "Colors", "Tab", "Switch panel"),
         row!("a", "Add to list", "BS", "Remove item"),
+        row!("r", "Refresh HVSC", "", ""),
         Line::from("─────────────────┴────────────────"),
         Line::from(vec![
             Span::styled(" h/?", key),

@@ -20,3 +20,9 @@ crossterm = "0.29"
 ureq = "3"
 dirs = "6"
 md-5 = "0.10"
+
+[profile.release]
+strip = true     # Automatically strip symbols from the binary.
+lto = true       # Link-time optimization
+
+
