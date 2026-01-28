@@ -13,7 +13,7 @@ const DECAY_RATE: f32 = 0.92;
 const PEAK_HOLD_MS: u128 = 500;
 
 /// Blend factor for oscilloscope persistence (0.0 = instant, 1.0 = frozen)
-const SCOPE_PERSISTENCE: f32 = 0.5;
+const SCOPE_PERSISTENCE: f32 = 0.6;
 
 /// VU meter state with smoothed decay for visual appeal.
 /// Supports dynamic voice count (3/6/9 for 1/2/3 SIDs).

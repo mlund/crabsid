@@ -483,6 +483,7 @@ fn draw_voice_scopes_vertical(frame: &mut Frame, area: Rect, app: &App, scheme: 
             &label,
             scheme.voices[color_idx],
             scheme.border_dim,
+            scheme.background,
         );
     }
 }
@@ -521,6 +522,7 @@ fn draw_voice_scopes_grid(
                 &label,
                 scheme.voices[color_idx],
                 scheme.border_dim,
+                scheme.background,
             );
         }
     }
@@ -533,6 +535,7 @@ fn draw_single_scope(
     title: &str,
     color: Color,
     border: Color,
+    background: Color,
 ) {
     let block = Block::default()
         .title(format!(" {title} "))
@@ -553,6 +556,7 @@ fn draw_single_scope(
 
     let canvas = Canvas::default()
         .marker(Marker::Braille)
+        .background_color(background)
         .x_bounds([0.0, width])
         .y_bounds([0.0, 1.0])
         .paint(|ctx| {
