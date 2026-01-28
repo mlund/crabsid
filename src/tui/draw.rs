@@ -419,9 +419,8 @@ fn draw_vu_meters(frame: &mut Frame, area: Rect, app: &App) {
             let color_idx = i % scheme.voices.len();
             Bar::default()
                 .value(level)
-                .label(Line::from(format!("{}", i + 1)))
+                .text_value(String::new())
                 .style(Style::default().fg(scheme.voices[color_idx]))
-                .value_style(Style::default().fg(scheme.text_primary).bold())
         })
         .collect();
 
