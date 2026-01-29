@@ -109,7 +109,7 @@ flowchart TB
     subgraph Player["Player Thread"]
         PLAYER[Player]
         PLAYER --> CPU
-        PLAYER <-- SIDCHIP
+        PLAYER --> SIDCHIP
     end
 
     subgraph Audio["Audio Thread"]
