@@ -2,7 +2,7 @@
 
 A TUI and command-line SID music player for C64 SID music playback. Written in Rust and emulates the MOS 6502 CPU and MOS 6581/8580 SID chip using ReSid. Supports multi-SID tunes with 2-3 chips for 6-9 voice playback.
 
-<img width="1063" height="422" alt="Image" src="https://github.com/user-attachments/assets/6dd6817b-a4c2-431a-a481-d107a0ef826d" />
+<img width="800" alt="Image" src="https://github.com/user-attachments/assets/e496456b-5052-46b0-9340-f498795074ff" />
 
 ## Features
 
