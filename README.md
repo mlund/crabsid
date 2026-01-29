@@ -1,5 +1,9 @@
 # CrabSID
 
+[![Release](https://img.shields.io/github/v/release/mlund/crabsid)](https://github.com/mlund/crabsid/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/mlund/crabsid/total)](https://github.com/mlund/crabsid/releases)
+[![License](https://img.shields.io/github/license/mlund/crabsid)](LICENSE)
+
 A TUI and command-line SID music player for C64 SID music playback. Written in Rust and emulates the MOS 6502 CPU and MOS 6581/8580 SID chip using ReSid. Supports multi-SID tunes with 2-3 chips for 6-9 voice playback.
 
 <img width="800" alt="Image" src="https://github.com/user-attachments/assets/e496456b-5052-46b0-9340-f498795074ff" />
@@ -26,8 +30,21 @@ A TUI and command-line SID music player for C64 SID music playback. Written in R
 
 ## Installation
 
-Works on Linux, macOS, Windows:
-ALSA development libraries are required on Linux:
+### Pre-built Binaries
+
+Download from [Releases](https://github.com/mlund/crabsid/releases/latest):
+
+| Platform | Architecture | Download |
+|----------|--------------|----------|
+| Windows | x86_64 | [crabsid-windows-x86_64.zip](https://github.com/mlund/crabsid/releases/latest/download/crabsid-windows-x86_64.zip) |
+| macOS | Apple Silicon | [crabsid-macos-aarch64.tar.gz](https://github.com/mlund/crabsid/releases/latest/download/crabsid-macos-aarch64.tar.gz) |
+| macOS | Intel | [crabsid-macos-x86_64.tar.gz](https://github.com/mlund/crabsid/releases/latest/download/crabsid-macos-x86_64.tar.gz) |
+| Linux | x86_64 | [crabsid-linux-x86_64.tar.gz](https://github.com/mlund/crabsid/releases/latest/download/crabsid-linux-x86_64.tar.gz) |
+| Linux | ARM64 | [crabsid-linux-aarch64.tar.gz](https://github.com/mlund/crabsid/releases/latest/download/crabsid-linux-aarch64.tar.gz) |
+
+### Build from Source
+
+Requires Rust toolchain. ALSA development libraries needed on Linux:
 
 ```bash
 # Debian/Ubuntu
