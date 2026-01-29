@@ -143,4 +143,6 @@ flowchart TB
 
 ## License
 
-MIT
+GPLv3 - The crabsid crate is licensed under the GNU General Public License v3.0 due to its dependency on `resid-rs` which is GPLv3 licensed.
+
+Individual source files are MIT licensed.
