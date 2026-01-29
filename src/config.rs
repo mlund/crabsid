@@ -7,12 +7,25 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+/// Default color scheme index (Gruvbox Dark Hard).
+const fn default_color_scheme() -> usize {
+    12
+}
+
 /// User configuration stored in config file.
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
     /// Selected color scheme index
-    #[serde(default)]
+    #[serde(default = "default_color_scheme")]
     pub color_scheme: usize,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            color_scheme: default_color_scheme(),
+        }
+    }
 }
 
 impl Config {

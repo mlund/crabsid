@@ -6,23 +6,23 @@ A TUI and command-line SID music player for C64 SID music playback. Written in R
 
 ## Features
 
-- Plays PSID format files (RSID/CIA-driven tunes require full C64 emulation)
-- **Multi-SID support** - 2SID and 3SID tunes (PSID v3+) with 6-9 voices
-- Supports both MOS 6581 and MOS 8580 SID chip emulation
-- MOS 6502 emulation with illegal opcodes
-- PAL and NTSC timing detection from file headers
-- Multi-song files with prev/next navigation
-- **HVSC Browser** - Browse and stream directly from the High Voltage SID Collection
-- **HVSC Search** - Search across 50,000+ SID files by path, title, or artist
-- **Songlengths** - Auto-advances using HVSC song duration database
-- **Local HVSC** - Use a local HVSC copy with `file://` URLs for offline playback
-- **Playlist support** - M3U playlists with local files and URLs
-- Terminal UI with:
-  - VU meters showing per-voice envelope levels (3/6/9 voices)
-  - Oscilloscope displaying envelope waveforms for all voices
-  - Real-time chip model switching (per-SID for multi-SID tunes)
-  - Color schemes (C64, Dracula, Monokai, Gruvbox, and more)
-- Written entirely in Rust
+- 🎵 **PSID Playback** — Plays PSID format files (RSID/CIA-driven tunes require full C64 emulation)
+- 🔊 **Multi-SID Support** — 2SID and 3SID tunes (PSID v3+) with 6-9 voices
+- 🎛️ **Dual Chip Emulation** — MOS 6581 and MOS 8580 SID chip support
+- ⚙️ **MOS 6502 CPU** — Full emulation with illegal opcodes
+- 🌍 **PAL/NTSC Timing** — Auto-detection from file headers
+- ⏭️ **Multi-Song Navigation** — Prev/next subsong controls
+- 🌐 **HVSC Browser** — Browse and stream directly from the High Voltage SID Collection
+- 🔍 **HVSC Search** — Search across 50,000+ SID files by path, title, or artist
+- ⏱️ **Songlengths** — Auto-advances using HVSC song duration database
+- 📁 **Local HVSC** — Use a local HVSC copy with `file://` URLs for offline playback
+- 📋 **Playlist Support** — M3U playlists with local files and URLs
+- 🖥️ **Terminal UI** — Powered by ratatui
+  - 📊 VU meters showing per-voice envelope levels (3/6/9 voices)
+  - 〰️ Oscilloscope displaying envelope waveforms for all voices
+  - 🔄 Real-time chip model switching (per-SID for multi-SID tunes)
+  - 🎨 Color schemes (C64, Dracula, Monokai, Gruvbox, and more)
+- 🦀 **Written in Rust**
 
 ## Installation
 
@@ -109,7 +109,7 @@ flowchart TB
     subgraph Player["Player Thread"]
         PLAYER[Player]
         PLAYER --> CPU
-        PLAYER --> SIDCHIP
+        PLAYER <-- SIDCHIP
     end
 
     subgraph Audio["Audio Thread"]
@@ -143,6 +143,6 @@ flowchart TB
 
 ## License
 
-GPLv3 - The crabsid crate is licensed under the GNU General Public License v3.0 due to its dependency on `resid-rs` which is GPLv3 licensed.
+The `crabsid` crate is licensed under the GNU General Public License v3.0 due to its dependency on `resid-rs` which is GPLv3 licensed.
 
 Individual source files are MIT licensed.
