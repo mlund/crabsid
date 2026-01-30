@@ -185,9 +185,7 @@ impl Player {
                 .iter()
                 .map(|s| i32::from(s.sid.output()))
                 .sum();
-            #[allow(clippy::cast_precision_loss)]
-            let mixed = (sum as f32) / (sid_count as f32) / 32768.0;
-            *sample = mixed;
+            *sample = mix_sample(sum, sid_count);
 
             self.capture_envelope_history();
         }
@@ -511,6 +509,13 @@ fn setup_stack_for_rts(cpu: &mut CPU<C64Memory, Nmos6502>) {
     cpu.registers.stack_pointer = StackPointer(0xFD);
 }
 
+fn mix_sample(sum: i32, sid_count: usize) -> f32 {
+    #[allow(clippy::cast_precision_loss)]
+    let mixed = (sum as f32) / (sid_count as f32) / 32768.0;
+    // Keep headroom to avoid int16 overflow in platform backends (DirectSound wraps on >1.0)
+    mixed.clamp(-0.999_5, 0.999_5)
+}
+
 fn run_init(cpu: &mut CPU<C64Memory, Nmos6502>, init_address: u16) -> PlayerResult<()> {
     run_routine(
         cpu,
@@ -625,6 +630,11 @@ mod tests {
         };
     }
 
+    fn load_fixture(name: &str) -> SidFile {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(name);
+        SidFile::load(path).expect("load fixture sid")
+    }
+
     #[test]
     fn envelope_samples_rotate_oldest_first() {
         let sid = test_sid!();
@@ -657,5 +667,39 @@ mod tests {
         let after = first_sid!(player).read_state();
 
         assert_sid_registers_eq!(before, after, 0..=0x18);
+    }
+
+    #[test]
+    fn mix_sample_limits_output() {
+        assert_eq!(mix_sample(0, 1), 0.0);
+        assert!(mix_sample(i32::MAX, 1) <= 1.0);
+        assert!(mix_sample(i32::MIN, 1) >= -1.0);
+        let clipped = mix_sample(40_000, 1);
+        assert!(clipped < 0.999_6);
+    }
+
+    #[test]
+    fn glitch_fixture_stays_within_i16_range() {
+        let sid = load_fixture("Glitch.sid");
+        let mut player = Player::new(&sid, sid.start_song, 44_100, None).expect("player init");
+
+        let mut buffer = vec![0.0f32; 1024];
+        let mut max_abs = 0.0f32;
+        let mut max_i16 = i16::MIN;
+        let mut min_i16 = i16::MAX;
+
+        for _ in 0..64 {
+            player.fill_buffer(&mut buffer);
+            for &s in &buffer {
+                let scaled = (s * i16::MAX as f32) as i16;
+                max_i16 = max_i16.max(scaled);
+                min_i16 = min_i16.min(scaled);
+                max_abs = max_abs.max(s.abs());
+            }
+        }
+
+        assert!(max_abs <= 0.9996, "mix exceeded headroom: {max_abs}");
+        assert!(max_i16 < i16::MAX, "scaled samples hit i16::MAX");
+        assert!(min_i16 > i16::MIN, "scaled samples hit i16::MIN");
     }
 }

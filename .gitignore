@@ -1,1 +1,5 @@
 /target
+/crabsid.exe
+/crabsid.exe.gz
+*.sid
+/playlist.m3u
