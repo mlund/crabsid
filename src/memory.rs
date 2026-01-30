@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Mikael Lund
 
 use mos6502::memory::Bus;
-use resid::{ChipModel, Sid};
+use residfp::{ChipModel, Sid};
 
 const RAM_SIZE: usize = 65536;
 const SID_REGISTER_COUNT: u16 = 0x20;

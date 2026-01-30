@@ -8,7 +8,7 @@ use crate::player::SharedPlayer;
 use crate::playlist::Playlist;
 use crate::sid_file::SidFile;
 use ratatui::widgets::ListState;
-use resid::ChipModel;
+use residfp::ChipModel;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 

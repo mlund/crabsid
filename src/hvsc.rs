@@ -68,10 +68,10 @@ fn fetch_with_cache(url: &str, cache_name: &str, latin1: bool) -> io::Result<Str
     let cache_path = cache_dir().map(|d| d.join(cache_name));
 
     // Try cache first
-    if let Some(ref path) = cache_path {
-        if path.exists() {
-            return read_file(path, latin1);
-        }
+    if let Some(ref path) = cache_path
+        && path.exists()
+    {
+        return read_file(path, latin1);
     }
 
     // Fetch from URL

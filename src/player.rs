@@ -7,7 +7,7 @@ use mos6502::cpu::CPU;
 use mos6502::instruction::Nmos6502;
 use mos6502::memory::Bus;
 use mos6502::registers::StackPointer;
-use resid::{ChipModel, SamplingMethod};
+use residfp::{ChipModel, SamplingMethod};
 use std::sync::{Arc, Mutex};
 use std::{error, fmt};
 
@@ -269,11 +269,10 @@ impl Player {
 
         // Set sampling parameters for all SIDs
         for sid_chip in &mut self.cpu.memory.sids {
-            sid_chip.sid.set_sampling_parameters(
-                SamplingMethod::Fast,
-                self.clock_hz,
-                self.sample_rate,
-            );
+            sid_chip
+                .sid
+                .set_sampling_parameters(SamplingMethod::Fast, self.clock_hz, self.sample_rate)
+                .unwrap();
         }
 
         // Resize envelope history for new voice count
@@ -376,11 +375,10 @@ impl Player {
         self.chip_models[idx] = new_model;
 
         self.cpu.memory.set_chip_model(idx, new_model);
-        self.cpu.memory.sids[idx].sid.set_sampling_parameters(
-            SamplingMethod::Fast,
-            self.clock_hz,
-            self.sample_rate,
-        );
+        self.cpu.memory.sids[idx]
+            .sid
+            .set_sampling_parameters(SamplingMethod::Fast, self.clock_hz, self.sample_rate)
+            .unwrap();
 
         // Restore writable registers (0x00-0x18) to maintain playback
         for (reg, &val) in state.sid_register[..0x19].iter().enumerate() {
@@ -486,7 +484,8 @@ fn bootstrap_cpu(
     for sid_chip in &mut memory.sids {
         sid_chip
             .sid
-            .set_sampling_parameters(SamplingMethod::Fast, clock_hz, sample_rate);
+            .set_sampling_parameters(SamplingMethod::Fast, clock_hz, sample_rate)
+            .unwrap();
     }
 
     memory.load(sid_file.load_address, &sid_file.data);

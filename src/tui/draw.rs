@@ -14,7 +14,7 @@ use ratatui::{
         canvas::{Canvas, Line as CanvasLine},
     },
 };
-use resid::ChipModel;
+use residfp::ChipModel;
 
 use super::app::{App, BrowserFocus, Popup};
 use super::theme::{ColorScheme, SCHEMES, c64};
