@@ -15,7 +15,7 @@ mod tui;
 
 use clap::Parser;
 use config::Config;
-use player::create_shared_player;
+use player::{SamplingMethod, create_shared_player};
 use playlist::Playlist;
 use sid_file::SidFile;
 use std::path::PathBuf;
@@ -54,6 +54,29 @@ struct Args {
     /// Maximum song playtime in seconds before advancing
     #[arg(long, default_value = "180")]
     playtime: u64,
+
+    /// Audio resampling method: fast, interpolate, resample, resample-fast, two-pass
+    #[arg(long, default_value = "two-pass", value_parser = parse_sampling_method)]
+    sampling: SamplingMethod,
+
+    /// Use EKV transistor model filter for more accurate 6581 emulation
+    #[arg(long)]
+    ekv: bool,
+}
+
+/// Parse sampling method from CLI string.
+fn parse_sampling_method(s: &str) -> Result<SamplingMethod, String> {
+    match s.to_lowercase().as_str() {
+        "fast" => Ok(SamplingMethod::Fast),
+        "interpolate" => Ok(SamplingMethod::Interpolate),
+        "resample" => Ok(SamplingMethod::Resample),
+        "resample-fast" => Ok(SamplingMethod::ResampleFast),
+        "two-pass" | "twopass" => Ok(SamplingMethod::ResampleTwoPass),
+        _ => Err(format!(
+            "unknown sampling method '{}', expected: fast, interpolate, resample, resample-fast, two-pass",
+            s
+        )),
+    }
 }
 
 fn default_playlist_path() -> PathBuf {
@@ -98,8 +121,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Unsupported RSID-like format (requires CIA/interrupt emulation)".into());
     }
 
-    let player = create_shared_player(&sid_file, initial_song, SAMPLE_RATE, args.chip)
-        .map_err(|e| format!("{e}"))?;
+    let player = create_shared_player(
+        &sid_file,
+        initial_song,
+        SAMPLE_RATE,
+        args.chip,
+        args.sampling,
+    )
+    .map_err(|e| format!("{e}"))?;
+
+    // Enable EKV filter if requested
+    if args.ekv
+        && let Ok(mut p) = player.lock()
+    {
+        for i in 0..p.sid_count() {
+            p.toggle_ekv_filter(Some(i));
+        }
+    }
 
     let params = OutputDeviceParameters {
         channels_count: 1,

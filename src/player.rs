@@ -7,7 +7,8 @@ use mos6502::cpu::CPU;
 use mos6502::instruction::Nmos6502;
 use mos6502::memory::Bus;
 use mos6502::registers::StackPointer;
-use residfp::{ChipModel, SamplingMethod};
+use residfp::ChipModel;
+pub use residfp::SamplingMethod;
 use std::sync::{Arc, Mutex};
 use std::{error, fmt};
 
@@ -61,6 +62,8 @@ pub struct Player {
     sample_rate: u32,
     /// Last playback error (auto-pauses on error)
     playback_error: Option<String>,
+    /// Resampling method for SID audio output
+    sampling_method: SamplingMethod,
 }
 
 /// Errors that can occur while initializing or running SID routines.
@@ -101,16 +104,31 @@ impl Player {
     ///
     /// Loads the tune into emulated memory, runs the init routine, and
     /// configures timing based on PAL/NTSC detection from the file header.
+    ///
+    /// The `sampling_method` parameter controls audio quality vs CPU usage:
+    /// - `Fast`: Direct output (lowest quality, lowest CPU)
+    /// - `Interpolate`: Linear interpolation (good quality, low CPU)
+    /// - `ResampleFast`: FIR resampling without interpolation
+    /// - `Resample`: FIR resampling with interpolation (highest quality)
+    /// - `ResampleTwoPass`: Two-stage FIR resampling (high quality, efficient)
     pub fn new(
         sid_file: &SidFile,
         song: u16,
         sample_rate: u32,
         chip_override: Option<u16>,
+        sampling_method: SamplingMethod,
     ) -> PlayerResult<Self> {
         let (clock_hz, cycles_per_frame) = timing_from_file(sid_file);
         let chip_models = select_chip_models(sid_file, chip_override);
 
-        let mut cpu = bootstrap_cpu(sid_file, &chip_models, sample_rate, clock_hz, song);
+        let mut cpu = bootstrap_cpu(
+            sid_file,
+            &chip_models,
+            sample_rate,
+            clock_hz,
+            song,
+            sampling_method,
+        );
 
         run_init(&mut cpu, sid_file.init_address)?;
 
@@ -137,6 +155,7 @@ impl Player {
             clock_hz,
             sample_rate,
             playback_error: None,
+            sampling_method,
         })
     }
 
@@ -271,7 +290,7 @@ impl Player {
         for sid_chip in &mut self.cpu.memory.sids {
             sid_chip
                 .sid
-                .set_sampling_parameters(SamplingMethod::Fast, self.clock_hz, self.sample_rate)
+                .set_sampling_parameters(self.sampling_method, self.clock_hz, self.sample_rate)
                 .unwrap();
         }
 
@@ -377,7 +396,7 @@ impl Player {
         self.cpu.memory.set_chip_model(idx, new_model);
         self.cpu.memory.sids[idx]
             .sid
-            .set_sampling_parameters(SamplingMethod::Fast, self.clock_hz, self.sample_rate)
+            .set_sampling_parameters(self.sampling_method, self.clock_hz, self.sample_rate)
             .unwrap();
 
         // Restore writable registers (0x00-0x18) to maintain playback
@@ -387,6 +406,20 @@ impl Player {
         }
 
         new_model
+    }
+
+    /// Toggles between standard and EKV transistor model filter.
+    ///
+    /// The EKV filter provides more accurate 6581 emulation using physics-based
+    /// MOS transistor modeling. Only affects 6581 chips; 8580 always uses standard.
+    ///
+    /// Returns `true` if now using EKV filter, `false` if using standard.
+    pub fn toggle_ekv_filter(&mut self, sid_index: Option<usize>) -> bool {
+        let idx = sid_index.unwrap_or(0);
+        if idx >= self.cpu.memory.sids.len() {
+            return false;
+        }
+        self.cpu.memory.sids[idx].sid.toggle_ekv_filter()
     }
 
     fn call_play(&mut self) -> PlayerResult<()> {
@@ -473,6 +506,7 @@ fn bootstrap_cpu(
     sample_rate: u32,
     clock_hz: u32,
     song: u16,
+    sampling_method: SamplingMethod,
 ) -> CPU<C64Memory, Nmos6502> {
     let mut memory = C64Memory::new(chip_models[0]);
 
@@ -484,7 +518,7 @@ fn bootstrap_cpu(
     for sid_chip in &mut memory.sids {
         sid_chip
             .sid
-            .set_sampling_parameters(SamplingMethod::Fast, clock_hz, sample_rate)
+            .set_sampling_parameters(sampling_method, clock_hz, sample_rate)
             .unwrap();
     }
 
@@ -566,8 +600,10 @@ pub fn create_shared_player(
     song: u16,
     sample_rate: u32,
     chip_override: Option<u16>,
+    sampling_method: SamplingMethod,
 ) -> PlayerResult<SharedPlayer> {
-    Player::new(sid_file, song, sample_rate, chip_override).map(|p| Arc::new(Mutex::new(p)))
+    Player::new(sid_file, song, sample_rate, chip_override, sampling_method)
+        .map(|p| Arc::new(Mutex::new(p)))
 }
 
 #[cfg(test)]
@@ -637,7 +673,8 @@ mod tests {
     #[test]
     fn envelope_samples_rotate_oldest_first() {
         let sid = test_sid!();
-        let mut player = Player::new(&sid, 1, 44_100, None).expect("player init");
+        let mut player =
+            Player::new(&sid, 1, 44_100, None, SamplingMethod::Fast).expect("player init");
 
         fill_history!(player, 0, 0.0);
         fill_history!(player, 1, 1000.0);
@@ -655,7 +692,8 @@ mod tests {
     #[test]
     fn switch_chip_preserves_sid_registers() {
         let sid = test_sid!();
-        let mut player = Player::new(&sid, 1, 44_100, None).expect("player init");
+        let mut player =
+            Player::new(&sid, 1, 44_100, None, SamplingMethod::Fast).expect("player init");
 
         for reg in 0..=0x18 {
             first_sid_mut!(player).write(reg, reg as u8);
@@ -680,7 +718,8 @@ mod tests {
     #[test]
     fn glitch_fixture_stays_within_i16_range() {
         let sid = load_fixture("Glitch.sid");
-        let mut player = Player::new(&sid, sid.start_song, 44_100, None).expect("player init");
+        let mut player = Player::new(&sid, sid.start_song, 44_100, None, SamplingMethod::Fast)
+            .expect("player init");
 
         let mut buffer = vec![0.0f32; 1024];
         let mut max_abs = 0.0f32;
