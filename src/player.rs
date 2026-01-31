@@ -7,13 +7,10 @@ use mos6502::cpu::CPU;
 use mos6502::instruction::Nmos6502;
 use mos6502::memory::Bus;
 use mos6502::registers::StackPointer;
-use residfp::ChipModel;
+use residfp::{clock, ChipModel};
 pub use residfp::SamplingMethod;
 use std::sync::{Arc, Mutex};
 use std::{error, fmt};
-
-const PAL_CLOCK_HZ: u32 = 985_248;
-const NTSC_CLOCK_HZ: u32 = 1_022_727;
 const PAL_FRAME_CYCLES: u32 = 19_656;
 const NTSC_FRAME_CYCLES: u32 = 17_045;
 
@@ -268,7 +265,7 @@ impl Player {
     /// Loads a completely new SID file, replacing the current tune.
     pub fn load_sid_file(&mut self, sid_file: &SidFile, song: u16) -> PlayerResult<()> {
         let is_pal = sid_file.is_pal();
-        self.clock_hz = if is_pal { PAL_CLOCK_HZ } else { NTSC_CLOCK_HZ };
+        self.clock_hz = if is_pal { clock::PAL } else { clock::NTSC };
         self.cycles_per_frame = if is_pal {
             PAL_FRAME_CYCLES
         } else {
@@ -441,9 +438,9 @@ impl Player {
 
 fn timing_from_file(sid_file: &SidFile) -> (u32, u32) {
     let clock_hz = if sid_file.is_pal() {
-        PAL_CLOCK_HZ
+        clock::PAL
     } else {
-        NTSC_CLOCK_HZ
+        clock::NTSC
     };
     let cycles_per_frame = if sid_file.is_pal() {
         PAL_FRAME_CYCLES
