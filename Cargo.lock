@@ -1001,8 +1001,9 @@ dependencies = [
 
 [[package]]
 name = "mos6502"
-version = "0.6.2"
-source = "git+https://github.com/mlund/mos6502.git?branch=illegal#9d9e6467b6d428b38fce28bf1551a7d9cd8727ff"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a83d9ff43d20a4a7b8872267b81cd0cddb47b67db10d4c03289573ac1deada52"
 dependencies = [
  "bitflags 2.11.0",
  "log",
@@ -1481,6 +1482,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 [[package]]
 name = "residfp"
 version = "1.1.1"
+source = "git+https://github.com/mlund/residfp#af7b15380242a75315c3959a39a485c295c2ddaf"
 dependencies = [
  "bit_field",
  "wide",

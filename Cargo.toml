@@ -10,21 +10,19 @@ keywords = ["sid", "c64", "commodore", "chiptune", "music"]
 categories = ["multimedia::audio", "emulators"]
 
 [dependencies]
-# Using fork with envelope overflow fix (https://github.com/binaryfields/resid-rs/pull/14)
-residfp = { path = "/Users/mikael/github/resid-rs", features = ["ekv-filter"] }
-mos6502 = { git = "https://github.com/mlund/mos6502.git", branch = "illegal" }
-tinyaudio = "2.0"
 clap = { version = "4", features = ["derive"] }
-ratatui = "0.30"
 crossterm = "0.29"
-ureq = "3"
 dirs = "6"
 md-5 = "0.10"
+mos6502 = "0.8"
+ratatui = "0.30"
+residfp = { git = "https://github.com/mlund/residfp", features = ["ekv-filter"] }
 serde = { version = "1", features = ["derive"] }
+tinyaudio = "2"
 toml = "0.8"
+ureq = "3"
 
 [profile.release]
-strip = true     # Automatically strip symbols from the binary.
-lto = false      # Link-time optimization
-
+strip = true
+lto = true
 
