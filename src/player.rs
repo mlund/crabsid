@@ -120,11 +120,11 @@ impl Player {
         sid_file: &SidFile,
         song: u16,
         sample_rate: u32,
-        chip_override: Option<u16>,
+        chip_override: Option<ChipModel>,
         sampling_method: SamplingMethod,
     ) -> PlayerResult<Self> {
         let (clock_hz, cycles_per_frame) = timing_from_file(sid_file);
-        let chip_models = select_chip_models(sid_file, chip_override);
+        let chip_models = sid_file.preferred_chip_models(chip_override);
 
         let mut cpu = bootstrap_cpu(
             sid_file,
@@ -279,8 +279,12 @@ impl Player {
         self.load_address = sid_file.load_address;
         self.sid_data = sid_file.data.clone();
 
-        self.chip_models = select_chip_models(sid_file, None);
-        let sid_configs = build_sid_configs(sid_file, &self.chip_models);
+        self.chip_models = sid_file.preferred_chip_models(None);
+        let sid_configs: Vec<(u16, ChipModel)> = sid_file
+            .sid_addresses()
+            .into_iter()
+            .zip(self.chip_models.iter().copied())
+            .collect();
         self.cpu.memory.configure_sids(&sid_configs);
 
         for sid_chip in &mut self.cpu.memory.sids {
@@ -355,55 +359,46 @@ impl Player {
         self.chip_models.len()
     }
 
-    /// Cycles the chip model for the specified SID (or first if index is None).
-    /// Returns the new model for that SID.
-    pub fn switch_chip_model(&mut self, sid_index: Option<usize>) -> ChipModel {
-        let idx = sid_index.unwrap_or(0);
-        let sid_count = self.cpu.memory.sids.len();
-        if idx >= self.chip_models.len() || idx >= sid_count {
-            return self
-                .chip_models
-                .first()
-                .copied()
-                .unwrap_or(ChipModel::Mos6581);
+    /// Cycles the chip model for the specified SID (0-indexed).
+    /// Returns the new model, or `None` if `sid_index` is out of range.
+    pub fn switch_chip_model(&mut self, sid_index: usize) -> Option<ChipModel> {
+        if sid_index >= self.chip_models.len() {
+            return None;
         }
 
-        // Save current register state before replacing the chip
-        let state = self.cpu.memory.sids[idx].sid.read_state();
+        // Save current register state before replacing the chip.
+        let state = self.cpu.memory.sids[sid_index].sid.read_state();
 
-        let new_model = match self.chip_models[idx] {
+        let new_model = match self.chip_models[sid_index] {
             ChipModel::Mos6581 => ChipModel::Mos8580,
             ChipModel::Mos8580 => ChipModel::Mos6581,
         };
-        self.chip_models[idx] = new_model;
+        self.chip_models[sid_index] = new_model;
 
-        self.cpu.memory.set_chip_model(idx, new_model);
-        self.cpu.memory.sids[idx]
+        self.cpu.memory.set_chip_model(sid_index, new_model);
+        self.cpu.memory.sids[sid_index]
             .sid
             .set_sampling_parameters(self.sampling_method, self.clock_hz, self.sample_rate)
             .unwrap();
 
-        // Restore writable registers (0x00-0x18) to maintain playback
+        // Restore writable registers (0x00-0x18) to maintain playback.
         for (reg, &val) in state.sid_register[..0x19].iter().enumerate() {
             #[allow(clippy::cast_possible_truncation)]
-            self.cpu.memory.sids[idx].sid.write(reg as u8, val);
+            self.cpu.memory.sids[sid_index].sid.write(reg as u8, val);
         }
 
-        new_model
+        Some(new_model)
     }
 
-    /// Toggles between standard and EKV transistor model filter.
+    /// Toggles between standard and EKV transistor model filter for the given SID.
     ///
     /// The EKV filter provides more accurate 6581 emulation using physics-based
     /// MOS transistor modeling. Only affects 6581 chips; 8580 always uses standard.
     ///
-    /// Returns `true` if now using EKV filter, `false` if using standard.
-    pub fn toggle_ekv_filter(&mut self, sid_index: Option<usize>) -> bool {
-        let idx = sid_index.unwrap_or(0);
-        if idx >= self.cpu.memory.sids.len() {
-            return false;
-        }
-        self.cpu.memory.sids[idx].sid.toggle_ekv_filter()
+    /// Returns `Some(true)` if now using EKV, `Some(false)` if standard, `None` if out of range.
+    pub fn toggle_ekv_filter(&mut self, sid_index: usize) -> Option<bool> {
+        let chip = self.cpu.memory.sids.get_mut(sid_index)?;
+        Some(chip.sid.toggle_ekv_filter())
     }
 
     fn call_play(&mut self) -> PlayerResult<()> {
@@ -413,9 +408,7 @@ impl Player {
         }
 
         // Reset stack each call: some tunes don't balance JSR/RTS over their lifetime.
-        self.cpu.memory.set_byte(STACK_HIGH, STACK_SENTINEL);
-        self.cpu.memory.set_byte(STACK_LOW, STACK_SENTINEL);
-        self.cpu.registers.stack_pointer = StackPointer(STACK_POINTER_INIT);
+        reset_stack_pointer(&mut self.cpu);
         self.cpu.registers.program_counter = self.play_address;
 
         run_play(&mut self.cpu, self.play_address)?;
@@ -431,43 +424,12 @@ fn timing_from_file(sid_file: &SidFile) -> (u32, u32) {
     }
 }
 
-/// Selects chip models for all SIDs in the file.
-fn select_chip_models(sid_file: &SidFile, chip_override: Option<u16>) -> Vec<ChipModel> {
-    let sid_count = sid_file.sid_count();
-    (0..sid_count)
-        .map(|i| select_chip_model_for_sid(sid_file, i, chip_override))
-        .collect()
-}
-
-fn select_chip_model_for_sid(
-    sid_file: &SidFile,
-    sid_index: usize,
-    chip_override: Option<u16>,
-) -> ChipModel {
-    // CLI override wins; otherwise use the file's per-SID flag (bits 4-5/6-7/8-9, value 2 = 8580).
-    match (chip_override, sid_file.chip_model_for_sid(sid_index)) {
-        (Some(8580), _) | (None, Some(2)) => ChipModel::Mos8580,
-        _ => ChipModel::Mos6581,
-    }
-}
-
-/// Builds SID configuration pairs (address, model) from file metadata.
 fn build_sid_configs(sid_file: &SidFile, chip_models: &[ChipModel]) -> Vec<(u16, ChipModel)> {
-    let mut configs = vec![(0xD400, chip_models[0])];
-
-    if let Some(addr) = sid_file.second_sid_address
-        && chip_models.len() > 1
-    {
-        configs.push((addr, chip_models[1]));
-    }
-
-    if let Some(addr) = sid_file.third_sid_address
-        && chip_models.len() > 2
-    {
-        configs.push((addr, chip_models[2]));
-    }
-
-    configs
+    sid_file
+        .sid_addresses()
+        .into_iter()
+        .zip(chip_models.iter().copied())
+        .collect()
 }
 
 fn bootstrap_cpu(
@@ -505,6 +467,10 @@ fn bootstrap_cpu(
 fn setup_stack_for_rts(cpu: &mut CPU<C64Memory, Nmos6502>) {
     // Tunes expect JSR/RTS pairing; plant an RTS at $0000 and a $FFFF return on the stack.
     cpu.memory.set_byte(0x0000, RTS_OPCODE);
+    reset_stack_pointer(cpu);
+}
+
+fn reset_stack_pointer(cpu: &mut CPU<C64Memory, Nmos6502>) {
     cpu.memory.set_byte(STACK_HIGH, STACK_SENTINEL);
     cpu.memory.set_byte(STACK_LOW, STACK_SENTINEL);
     cpu.registers.stack_pointer = StackPointer(STACK_POINTER_INIT);
@@ -563,7 +529,7 @@ pub fn create_shared_player(
     sid_file: &SidFile,
     song: u16,
     sample_rate: u32,
-    chip_override: Option<u16>,
+    chip_override: Option<ChipModel>,
     sampling_method: SamplingMethod,
 ) -> PlayerResult<SharedPlayer> {
     Player::new(sid_file, song, sample_rate, chip_override, sampling_method)
@@ -664,7 +630,7 @@ mod tests {
         }
         let before = first_sid!(player).read_state();
 
-        player.switch_chip_model(None);
+        player.switch_chip_model(0);
         let after = first_sid!(player).read_state();
 
         assert_sid_registers_eq!(before, after, 0..=0x18);

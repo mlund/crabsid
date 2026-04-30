@@ -301,7 +301,7 @@ impl<'a> App<'a> {
                 self.selected_sid = 0;
             }
 
-            player.switch_chip_model(Some(self.selected_sid));
+            player.switch_chip_model(self.selected_sid);
             self.chip_models = player.chip_models().to_vec();
 
             // Cycle to next SID for the next 's' press

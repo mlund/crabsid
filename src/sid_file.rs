@@ -2,9 +2,13 @@
 // Copyright (c) 2026 Mikael Lund
 
 use md5::{Digest, Md5};
+use residfp::ChipModel;
 use std::fs;
 use std::io;
 use std::path::Path;
+
+/// Primary SID register base address on the C64 ($D400).
+pub const PRIMARY_SID_ADDRESS: u16 = 0xD400;
 
 // PSID/RSID header field offsets (big-endian format)
 const HEADER_MIN_SIZE: usize = 0x76;
@@ -200,16 +204,58 @@ impl SidFile {
         }
     }
 
-    /// Returns the preferred chip model for the nth SID (0-indexed).
-    /// Bits 4-5 of flags: first SID, bits 6-7: second SID, bits 8-9: third SID.
-    pub fn chip_model_for_sid(&self, index: usize) -> Option<u8> {
+    /// Returns the register base addresses for each SID, ordered by chip index.
+    pub fn sid_addresses(&self) -> Vec<u16> {
+        let mut addrs = vec![PRIMARY_SID_ADDRESS];
+        addrs.extend(self.second_sid_address);
+        addrs.extend(self.third_sid_address);
+        addrs
+    }
+
+    /// Returns the preferred chip model per SID, applying `override_model` to all if given.
+    /// Otherwise reads PSID v2+ flag bits (4-5 = SID1, 6-7 = SID2, 8-9 = SID3; value 2 = 8580).
+    pub fn preferred_chip_models(&self, override_model: Option<ChipModel>) -> Vec<ChipModel> {
+        (0..self.sid_count())
+            .map(|i| override_model.unwrap_or_else(|| self.chip_model_for_sid(i)))
+            .collect()
+    }
+
+    fn chip_model_for_sid(&self, index: usize) -> ChipModel {
         if self.version < 2 {
-            return None;
+            return ChipModel::Mos6581;
         }
         let shift = 4 + index * 2;
         let model = (self.flags >> shift) & 0x03;
-        // 0=unknown, 1=6581, 2=8580, 3=6581+8580
-        if model == 0 { None } else { Some(model as u8) }
+        // 0=unknown, 1=6581, 2=8580, 3=6581+8580 (PSID spec)
+        if model == 2 {
+            ChipModel::Mos8580
+        } else {
+            ChipModel::Mos6581
+        }
+    }
+
+    /// A minimal silent PSID stub used when the player has nothing to play.
+    pub fn silent() -> Self {
+        Self {
+            magic: "PSID".to_string(),
+            version: 2,
+            data_offset: 0x7c,
+            load_address: 0x1000,
+            init_address: 0x1000,
+            play_address: 0x1003,
+            songs: 1,
+            start_song: 1,
+            speed: 0,
+            name: String::new(),
+            author: String::new(),
+            released: String::new(),
+            flags: 0,
+            // Three RTS opcodes so init/play return immediately.
+            data: vec![0x60, 0x60, 0x60],
+            md5: String::new(),
+            second_sid_address: None,
+            third_sid_address: None,
+        }
     }
 }
 
@@ -294,9 +340,9 @@ mod tests {
         assert_eq!(sid.sid_count(), 2);
         assert_eq!(sid.second_sid_address, Some(0xD500));
         assert_eq!(sid.third_sid_address, None);
-        // Both SIDs request 8580 (model bits = 2)
-        assert_eq!(sid.chip_model_for_sid(0), Some(2));
-        assert_eq!(sid.chip_model_for_sid(1), Some(2));
+        // Both SIDs request 8580 (model bits = 2).
+        let models = sid.preferred_chip_models(None);
+        assert_eq!(models, vec![ChipModel::Mos8580, ChipModel::Mos8580]);
     }
 
     #[test]

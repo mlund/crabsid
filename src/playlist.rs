@@ -72,7 +72,7 @@ fn parse_subsong(s: &str) -> (&str, Option<u16>) {
 }
 
 /// Extracts filename from path or URL. Handles both unix and windows separators.
-pub fn extract_filename(path: &str) -> String {
+pub(crate) fn extract_filename(path: &str) -> String {
     path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
 }
 

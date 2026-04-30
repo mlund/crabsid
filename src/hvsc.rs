@@ -49,11 +49,11 @@ fn cache_dir() -> Option<PathBuf> {
     Some(dir)
 }
 
-/// Clears the HVSC cache files (STIL.txt and Songlengths.md5).
+/// Clears the HVSC cache files.
 pub fn clear_cache() {
-    if let Some(dir) = cache_dir() {
-        let _ = fs::remove_file(dir.join("STIL.txt"));
-        let _ = fs::remove_file(dir.join("Songlengths.md5"));
+    let Some(dir) = cache_dir() else { return };
+    for name in [StilDatabase::CACHE_NAME, SonglengthsDatabase::CACHE_NAME] {
+        let _ = fs::remove_file(dir.join(name));
     }
 }
 
@@ -109,10 +109,12 @@ pub struct StilDatabase {
 }
 
 impl StilDatabase {
+    pub const CACHE_NAME: &'static str = "STIL.txt";
+
     /// Fetches and parses the STIL file from HVSC, using cache if available.
     pub fn fetch(base_url: &str) -> io::Result<Self> {
-        let url = format!("{base_url}/DOCUMENTS/STIL.txt");
-        let content = fetch_with_cache(&url, "STIL.txt", true)?;
+        let url = format!("{base_url}/DOCUMENTS/{}", Self::CACHE_NAME);
+        let content = fetch_with_cache(&url, Self::CACHE_NAME, true)?;
         Ok(Self::parse(&content))
     }
 
@@ -204,10 +206,12 @@ pub struct SonglengthsDatabase {
 }
 
 impl SonglengthsDatabase {
+    pub const CACHE_NAME: &'static str = "Songlengths.md5";
+
     /// Fetches and parses the Songlengths.md5 file from HVSC, using cache if available.
     pub fn fetch(base_url: &str) -> io::Result<Self> {
-        let url = format!("{base_url}/DOCUMENTS/Songlengths.md5");
-        let content = fetch_with_cache(&url, "Songlengths.md5", false)?;
+        let url = format!("{base_url}/DOCUMENTS/{}", Self::CACHE_NAME);
+        let content = fetch_with_cache(&url, Self::CACHE_NAME, false)?;
         Ok(Self::parse(&content))
     }
 
@@ -231,9 +235,9 @@ impl SonglengthsDatabase {
         Self { entries }
     }
 
-    /// Looks up song durations by MD5 hash.
+    /// Looks up song durations by MD5 hash. Expects lowercase hex (matches `SidFile::md5`).
     pub fn get(&self, md5: &str) -> Option<&[std::time::Duration]> {
-        self.entries.get(&md5.to_lowercase()).map(|v| v.as_slice())
+        self.entries.get(md5).map(|v| v.as_slice())
     }
 
     /// Returns the number of entries in the database.
@@ -312,31 +316,25 @@ pub struct HvscBrowser {
     pub error: Option<String>,
 }
 
+/// Top-level HVSC categories shown when the browser is at "/".
+fn root_entries() -> Vec<HvscEntry> {
+    ["MUSICIANS", "GAMES", "DEMOS"]
+        .into_iter()
+        .map(|name| HvscEntry {
+            name: name.to_string(),
+            path: format!("/{name}/"),
+            is_dir: true,
+        })
+        .collect()
+}
+
 impl HvscBrowser {
     /// Creates a new browser at the root level.
     pub fn new(base_url: &str) -> Self {
-        let entries = vec![
-            HvscEntry {
-                name: "MUSICIANS".to_string(),
-                path: "/MUSICIANS/".to_string(),
-                is_dir: true,
-            },
-            HvscEntry {
-                name: "GAMES".to_string(),
-                path: "/GAMES/".to_string(),
-                is_dir: true,
-            },
-            HvscEntry {
-                name: "DEMOS".to_string(),
-                path: "/DEMOS/".to_string(),
-                is_dir: true,
-            },
-        ];
-
         Self {
             base_url: base_url.to_string(),
             current_path: "/".to_string(),
-            entries,
+            entries: root_entries(),
             selected: 0,
             stil: None,
             stil_error: None,
@@ -428,13 +426,11 @@ impl HvscBrowser {
     /// Navigate to a specific path.
     pub fn navigate_to(&mut self, path: &str) {
         if path == "/" {
-            // Preserve STIL and base_url across navigation
-            let stil = self.stil.take();
-            let stil_error = self.stil_error.take();
-            let base_url = self.base_url.clone();
-            *self = Self::new(&base_url);
-            self.stil = stil;
-            self.stil_error = stil_error;
+            // Reset entries to root listing without losing the loaded databases.
+            self.entries = root_entries();
+            self.current_path = "/".to_string();
+            self.selected = 0;
+            self.error = None;
             return;
         }
 

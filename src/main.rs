@@ -17,6 +17,7 @@ use clap::Parser;
 use config::Config;
 use player::{SamplingMethod, create_shared_player};
 use playlist::Playlist;
+use residfp::ChipModel;
 use sid_file::SidFile;
 use std::path::PathBuf;
 use tinyaudio::prelude::*;
@@ -108,18 +109,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let song = args.song.or(entry.subsong).unwrap_or(sid.start_song);
         (sid, song)
     } else {
-        (create_silent_sid(), 1)
+        (SidFile::silent(), 1)
     };
 
     if sid_file.requires_full_emulation() {
         return Err("Unsupported RSID-like format (requires CIA/interrupt emulation)".into());
     }
 
+    let chip_override = args.chip.map(|n| match n {
+        8580 => ChipModel::Mos8580,
+        _ => ChipModel::Mos6581,
+    });
+
     let player = create_shared_player(
         &sid_file,
         initial_song,
         SAMPLE_RATE,
-        args.chip,
+        chip_override,
         args.sampling,
     )
     .map_err(|e| format!("{e}"))?;
@@ -128,7 +134,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         && let Ok(mut p) = player.lock()
     {
         for i in 0..p.sid_count() {
-            p.toggle_ekv_filter(Some(i));
+            p.toggle_ekv_filter(i);
         }
     }
 
@@ -169,29 +175,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
-}
-
-/// Creates a minimal silent SID for when no file is loaded.
-fn create_silent_sid() -> SidFile {
-    SidFile {
-        magic: "PSID".to_string(),
-        version: 2,
-        data_offset: 0x7c,
-        load_address: 0x1000,
-        init_address: 0x1000,
-        play_address: 0x1003,
-        songs: 1,
-        start_song: 1,
-        speed: 0,
-        name: String::new(),
-        author: String::new(),
-        released: String::new(),
-        flags: 0,
-        data: vec![0x60, 0x60, 0x60], // RTS instructions
-        md5: String::new(),
-        second_sid_address: None,
-        third_sid_address: None,
-    }
 }
 
 fn run_simple(sid_file: &SidFile, song: u16) -> Result<(), Box<dyn std::error::Error>> {
