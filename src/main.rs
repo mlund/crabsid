@@ -73,8 +73,7 @@ fn parse_sampling_method(s: &str) -> Result<SamplingMethod, String> {
         "resample-fast" => Ok(SamplingMethod::ResampleFast),
         "two-pass" | "twopass" => Ok(SamplingMethod::ResampleTwoPass),
         _ => Err(format!(
-            "unknown sampling method '{}', expected: fast, interpolate, resample, resample-fast, two-pass",
-            s
+            "unknown sampling method '{s}', expected: fast, interpolate, resample, resample-fast, two-pass"
         )),
     }
 }
@@ -139,13 +138,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         channel_sample_count: BUFFER_SIZE,
     };
 
-    // Audio callback runs in separate thread
-    let _device = run_output_device(params, {
-        let player = player.clone();
-        move |data| {
-            if let Ok(mut p) = player.lock() {
-                p.fill_buffer(data);
-            }
+    // Audio callback runs in separate thread.
+    let player_audio = player.clone();
+    let _device = run_output_device(params, move |data| {
+        if let Ok(mut p) = player_audio.lock() {
+            p.fill_buffer(data);
         }
     })?;
 

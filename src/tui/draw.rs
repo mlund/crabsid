@@ -154,11 +154,14 @@ fn draw_hvsc_search_results(
     let query = app.hvsc_search.as_deref().unwrap_or("");
     let count = app.hvsc_search_results.len();
     let title = if let Some(err) = &app.hvsc_browser.stil_error {
-        format!(" Search: {}_ [{}] ", query, err)
+        format!(" Search: {query}_ [{err}] ")
     } else {
         match &app.hvsc_browser.stil {
-            None => format!(" Search: {}_ [STIL not loaded] ", query),
-            Some(stil) => format!(" Search: {}_ ({} of {} entries) ", query, count, stil.len()),
+            None => format!(" Search: {query}_ [STIL not loaded] "),
+            Some(stil) => {
+                let total = stil.len();
+                format!(" Search: {query}_ ({count} of {total} entries) ")
+            }
         }
     };
 
@@ -323,14 +326,14 @@ fn sid_info_lines(app: &App) -> Vec<Line<'static>> {
 
 /// Formats chip models for display: "[6581]", "[2x SID: 6581+8580]", etc.
 fn format_chip_models(models: &[ChipModel]) -> String {
-    let names: Vec<&str> = models.iter().map(chip_model_name).collect();
+    let names: Vec<&str> = models.iter().copied().map(chip_model_name).collect();
     match names.as_slice() {
         [single] => format!("[{single}]"),
-        [..] => format!("[{}x SID: {}]", names.len(), names.join("+")),
+        _ => format!("[{}x SID: {}]", names.len(), names.join("+")),
     }
 }
 
-const fn chip_model_name(model: &ChipModel) -> &'static str {
+const fn chip_model_name(model: ChipModel) -> &'static str {
     match model {
         ChipModel::Mos6581 => "6581",
         ChipModel::Mos8580 => "8580",
@@ -645,15 +648,11 @@ fn draw_color_scheme_popup(frame: &mut Frame, app: &App) {
 }
 
 fn draw_popup(frame: &mut Frame, app: &App) {
-    if matches!(app.popup, Popup::ColorScheme) {
-        draw_color_scheme_popup(frame, app);
-        return;
-    }
-
     let scheme = app.scheme();
 
     let (title, content, small) = match &app.popup {
-        Popup::None | Popup::ColorScheme => return,
+        Popup::None => return,
+        Popup::ColorScheme => return draw_color_scheme_popup(frame, app),
         Popup::Help => (" Help ", help_text(scheme), true),
         Popup::Error(msg) => (" Error ", vec![Line::from(msg.as_str())], false),
         Popup::SaveConfirm => (

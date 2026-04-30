@@ -19,6 +19,14 @@ const SCOPE_BUFFER_SIZE: usize = 1024;
 /// Envelope sampling divisor (sample envelope every N audio samples)
 const ENVELOPE_SAMPLE_DIVISOR: usize = 4;
 
+/// Sentinel return address pushed onto the stack so JSR'd routines RTS to $0000,
+/// where we plant an RTS opcode to halt single-stepping cleanly.
+const STACK_HIGH: u16 = 0x01FF;
+const STACK_LOW: u16 = 0x01FE;
+const STACK_SENTINEL: u8 = 0xFF;
+const STACK_POINTER_INIT: u8 = 0xFD;
+const RTS_OPCODE: u8 = 0x60;
+
 /// SID music player combining 6502 CPU and SID chip emulation.
 ///
 /// Executes the SID tune's play routine at the correct frame rate while
@@ -237,10 +245,11 @@ impl Player {
         self.envelope_history
             .iter()
             .map(|history| {
-                let mut samples = Vec::with_capacity(SCOPE_BUFFER_SIZE);
-                samples.extend_from_slice(&history[self.envelope_write_pos..]);
-                samples.extend_from_slice(&history[..self.envelope_write_pos]);
-                samples
+                history[self.envelope_write_pos..]
+                    .iter()
+                    .chain(&history[..self.envelope_write_pos])
+                    .copied()
+                    .collect()
             })
             .collect()
     }
@@ -403,10 +412,10 @@ impl Player {
             return Ok(());
         }
 
-        // Reset stack for each call to handle tunes that don't balance the stack
-        self.cpu.memory.set_byte(0x01FF, 0xFF);
-        self.cpu.memory.set_byte(0x01FE, 0xFF);
-        self.cpu.registers.stack_pointer = StackPointer(0xFD);
+        // Reset stack each call: some tunes don't balance JSR/RTS over their lifetime.
+        self.cpu.memory.set_byte(STACK_HIGH, STACK_SENTINEL);
+        self.cpu.memory.set_byte(STACK_LOW, STACK_SENTINEL);
+        self.cpu.registers.stack_pointer = StackPointer(STACK_POINTER_INIT);
         self.cpu.registers.program_counter = self.play_address;
 
         run_play(&mut self.cpu, self.play_address)?;
@@ -415,17 +424,11 @@ impl Player {
 }
 
 fn timing_from_file(sid_file: &SidFile) -> (u32, u32) {
-    let clock_hz = if sid_file.is_pal() {
-        clock::PAL
+    if sid_file.is_pal() {
+        (clock::PAL, PAL_FRAME_CYCLES)
     } else {
-        clock::NTSC
-    };
-    let cycles_per_frame = if sid_file.is_pal() {
-        PAL_FRAME_CYCLES
-    } else {
-        NTSC_FRAME_CYCLES
-    };
-    (clock_hz, cycles_per_frame)
+        (clock::NTSC, NTSC_FRAME_CYCLES)
+    }
 }
 
 /// Selects chip models for all SIDs in the file.
@@ -441,17 +444,9 @@ fn select_chip_model_for_sid(
     sid_index: usize,
     chip_override: Option<u16>,
 ) -> ChipModel {
-    if let Some(override_val) = chip_override {
-        return if override_val == 8580 {
-            ChipModel::Mos8580
-        } else {
-            ChipModel::Mos6581
-        };
-    }
-
-    // Check file's preference for this SID (bits 4-5 for SID1, 6-7 for SID2, 8-9 for SID3)
-    match sid_file.chip_model_for_sid(sid_index) {
-        Some(2) => ChipModel::Mos8580,
+    // CLI override wins; otherwise use the file's per-SID flag (bits 4-5/6-7/8-9, value 2 = 8580).
+    match (chip_override, sid_file.chip_model_for_sid(sid_index)) {
+        (Some(8580), _) | (None, Some(2)) => ChipModel::Mos8580,
         _ => ChipModel::Mos6581,
     }
 }
@@ -508,11 +503,11 @@ fn bootstrap_cpu(
 }
 
 fn setup_stack_for_rts(cpu: &mut CPU<C64Memory, Nmos6502>) {
-    // Tunes expect JSR/RTS pairing; place an RTS at $0000 and push $FFFF
-    cpu.memory.set_byte(0x0000, 0x60);
-    cpu.memory.set_byte(0x01FF, 0xFF);
-    cpu.memory.set_byte(0x01FE, 0xFF);
-    cpu.registers.stack_pointer = StackPointer(0xFD);
+    // Tunes expect JSR/RTS pairing; plant an RTS at $0000 and a $FFFF return on the stack.
+    cpu.memory.set_byte(0x0000, RTS_OPCODE);
+    cpu.memory.set_byte(STACK_HIGH, STACK_SENTINEL);
+    cpu.memory.set_byte(STACK_LOW, STACK_SENTINEL);
+    cpu.registers.stack_pointer = StackPointer(STACK_POINTER_INIT);
 }
 
 fn mix_sample(sum: i32, sid_count: usize) -> f32 {

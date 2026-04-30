@@ -259,7 +259,7 @@ impl<'a> App<'a> {
     }
 
     pub fn goto_song(&mut self, song: u16) {
-        if song >= 1 && song <= self.total_songs {
+        if (1..=self.total_songs).contains(&song) {
             self.current_song = song;
             self.load_song_on_player(song);
             self.reset_song_timer();

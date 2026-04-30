@@ -234,12 +234,13 @@ fn parse_sid_address(byte: u8) -> Option<u16> {
 /// Reads a null-terminated Latin-1 string (ISO-8859-1, used in SID headers).
 fn read_string(bytes: &[u8]) -> String {
     let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    // Latin-1 maps directly to Unicode code points; trimming on the byte slice avoids
+    // a second String allocation.
     bytes[..end]
+        .trim_ascii()
         .iter()
-        .map(|&b| b as char) // Latin-1 maps directly to Unicode code points
-        .collect::<String>()
-        .trim()
-        .to_string()
+        .map(|&b| b as char)
+        .collect()
 }
 
 #[cfg(test)]

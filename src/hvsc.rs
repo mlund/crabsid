@@ -490,8 +490,7 @@ fn read_local_directory(base_path: &str, path: &str) -> io::Result<Vec<HvscEntry
             let name = e.file_name().to_string_lossy().to_string();
             let is_dir = e.file_type().ok()?.is_dir();
 
-            // Skip non-SID files (but keep directories)
-            if !is_dir && !name.to_lowercase().ends_with(".sid") {
+            if !is_browsable(is_dir, &name) {
                 return None;
             }
 
@@ -515,11 +514,16 @@ fn read_local_directory(base_path: &str, path: &str) -> io::Result<Vec<HvscEntry
 
 /// Sorts entries with directories first, then case-insensitive alphabetical for browsing.
 fn sort_entries(entries: &mut [HvscEntry]) {
-    entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
-        (true, false) => std::cmp::Ordering::Less,
-        (false, true) => std::cmp::Ordering::Greater,
-        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+    entries.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
+}
+
+/// Browser shows directories and `.sid` files only.
+fn is_browsable(is_dir: bool, name: &str) -> bool {
+    is_dir || name.to_lowercase().ends_with(".sid")
 }
 
 /// Fetches and parses an HTTP directory listing.
@@ -534,16 +538,14 @@ fn extract_href(line: &str) -> Option<&str> {
         return None;
     }
 
-    let start = line.find("href=\"")? + 6;
-    let rest = &line[start..];
-    let end = rest.find('"')?;
-    let href = &rest[..end];
+    let (_, rest) = line.split_once("href=\"")?;
+    let (href, _) = rest.split_once('"')?;
 
-    // Apache listings include sort links and parent refs we don't want
-    let dominated_by_nav =
+    // Apache listings include sort links and parent refs we don't want.
+    let is_navigation =
         href.starts_with('?') || href.starts_with('/') || href.starts_with("http") || href == "../";
 
-    if dominated_by_nav { None } else { Some(href) }
+    if is_navigation { None } else { Some(href) }
 }
 
 /// Parses an Apache-style directory listing HTML.
@@ -555,8 +557,7 @@ fn parse_directory_listing(html: &str, base_path: &str) -> Vec<HvscEntry> {
             let is_dir = href.ends_with('/');
             let name = href.trim_end_matches('/').to_string();
 
-            // HVSC contains non-SID files (txt, etc) we skip
-            if !is_dir && !name.to_lowercase().ends_with(".sid") {
+            if !is_browsable(is_dir, &name) {
                 return None;
             }
 
