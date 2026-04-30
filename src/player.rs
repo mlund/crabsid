@@ -479,7 +479,8 @@ fn reset_stack_pointer(cpu: &mut CPU<C64Memory, Nmos6502>) {
 fn mix_sample(sum: i32, sid_count: usize) -> f32 {
     #[allow(clippy::cast_precision_loss)]
     let mixed = (sum as f32) / (sid_count as f32) / 32768.0;
-    // Keep headroom to avoid int16 overflow in platform backends (DirectSound wraps on >1.0)
+    // Keep a small headroom: backends running at i16/u16 will wrap if a sample
+    // converts to exactly i16::MAX, and downstream limiters dislike a hot 1.0.
     mixed.clamp(-0.999_5, 0.999_5)
 }
 

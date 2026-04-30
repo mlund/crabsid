@@ -5,6 +5,7 @@
 
 #![deny(missing_docs)]
 
+mod audio;
 mod config;
 mod hvsc;
 mod memory;
@@ -13,6 +14,7 @@ mod playlist;
 mod sid_file;
 mod tui;
 
+use audio::AudioOutput;
 use clap::Parser;
 use config::Config;
 use player::{SamplingMethod, create_shared_player};
@@ -20,10 +22,6 @@ use playlist::Playlist;
 use residfp::ChipModel;
 use sid_file::SidFile;
 use std::path::PathBuf;
-use tinyaudio::prelude::*;
-
-const SAMPLE_RATE: u32 = 44100;
-const BUFFER_SIZE: usize = 1024;
 
 #[derive(Parser)]
 #[command(name = "crabsid", version, about = "C64 SID music player in pure Rust")]
@@ -121,10 +119,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => ChipModel::Mos6581,
     });
 
+    // Probe the audio device first so the player's resampler runs at the device rate.
+    let audio = AudioOutput::probe()?;
+
     let player = create_shared_player(
         &sid_file,
         initial_song,
-        SAMPLE_RATE,
+        audio.sample_rate,
         chip_override,
         args.sampling,
     )
@@ -138,15 +139,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let params = OutputDeviceParameters {
-        channels_count: 1,
-        sample_rate: SAMPLE_RATE as usize,
-        channel_sample_count: BUFFER_SIZE,
-    };
-
-    // Audio callback runs in separate thread.
+    // Audio callback runs on cpal's internal audio thread.
     let player_audio = player.clone();
-    let _device = run_output_device(params, move |data| {
+    let _stream = audio.start(move |data| {
         if let Ok(mut p) = player_audio.lock() {
             p.fill_buffer(data);
         }

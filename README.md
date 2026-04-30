@@ -130,7 +130,7 @@ flowchart TB
     end
 
     subgraph Audio["Audio Thread"]
-        AUDIO[tinyaudio]
+        AUDIO[cpal]
         BUFFER[Audio Buffer]
     end
 
