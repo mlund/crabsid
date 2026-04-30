@@ -7,8 +7,8 @@ use mos6502::cpu::CPU;
 use mos6502::instruction::Nmos6502;
 use mos6502::memory::Bus;
 use mos6502::registers::StackPointer;
-use residfp::{clock, ChipModel};
 pub use residfp::SamplingMethod;
+use residfp::{ChipModel, clock};
 use std::sync::{Arc, Mutex};
 use std::{error, fmt};
 const PAL_FRAME_CYCLES: u32 = 19_656;
@@ -186,14 +186,12 @@ impl Player {
                     }
                 }
 
-                // Clock all SIDs
                 for sid_chip in &mut self.cpu.memory.sids {
                     sid_chip.sid.clock();
                 }
                 self.frame_cycle_count += 1;
             }
 
-            // Mix all SID outputs
             let sum: i32 = self
                 .cpu
                 .memory
@@ -264,13 +262,7 @@ impl Player {
 
     /// Loads a completely new SID file, replacing the current tune.
     pub fn load_sid_file(&mut self, sid_file: &SidFile, song: u16) -> PlayerResult<()> {
-        let is_pal = sid_file.is_pal();
-        self.clock_hz = if is_pal { clock::PAL } else { clock::NTSC };
-        self.cycles_per_frame = if is_pal {
-            PAL_FRAME_CYCLES
-        } else {
-            NTSC_FRAME_CYCLES
-        };
+        (self.clock_hz, self.cycles_per_frame) = timing_from_file(sid_file);
         self.cycles_per_sample = f64::from(self.clock_hz) / f64::from(self.sample_rate);
 
         self.play_address = sid_file.play_address;
@@ -278,12 +270,10 @@ impl Player {
         self.load_address = sid_file.load_address;
         self.sid_data = sid_file.data.clone();
 
-        // Configure SIDs from file (may be 1, 2, or 3 chips)
         self.chip_models = select_chip_models(sid_file, None);
         let sid_configs = build_sid_configs(sid_file, &self.chip_models);
         self.cpu.memory.configure_sids(&sid_configs);
 
-        // Set sampling parameters for all SIDs
         for sid_chip in &mut self.cpu.memory.sids {
             sid_chip
                 .sid
@@ -291,7 +281,6 @@ impl Player {
                 .unwrap();
         }
 
-        // Resize envelope history for new voice count
         let voice_count = self.chip_models.len() * 3;
         self.envelope_history = (0..voice_count)
             .map(|_| Box::new([0.0; SCOPE_BUFFER_SIZE]))
@@ -304,36 +293,25 @@ impl Player {
     /// Reinitialize for a different song number (1-indexed).
     /// Reloads SID data, resets CPU state, and runs the init routine.
     pub fn load_song(&mut self, song: u16) -> PlayerResult<()> {
-        // Clear zero page and stack to remove state from previous song
         self.cpu.memory.clear_zeropage_and_stack();
-
-        // Reload the SID data to reset any modified memory
         self.cpu.memory.load(self.load_address, &self.sid_data);
 
-        // Reset all SID chips
         for sid_chip in &mut self.cpu.memory.sids {
             sid_chip.sid.reset();
         }
 
-        // Reset all CPU registers (not just accumulator)
         self.cpu.registers.index_x = 0;
         self.cpu.registers.index_y = 0;
         self.cpu.registers.status = mos6502::registers::Status::empty();
 
-        // Set up CPU for init routine
-        self.cpu.memory.set_byte(0x0000, 0x60);
-        self.cpu.memory.set_byte(0x01FF, 0xFF);
-        self.cpu.memory.set_byte(0x01FE, 0xFF);
-        self.cpu.registers.stack_pointer = StackPointer(0xFD);
+        setup_stack_for_rts(&mut self.cpu);
         #[allow(clippy::cast_possible_truncation)]
         let song_index = song.saturating_sub(1) as u8;
         self.cpu.registers.accumulator = song_index;
         self.cpu.registers.program_counter = self.init_address;
 
-        // Run init routine
         run_init(&mut self.cpu, self.init_address)?;
 
-        // Reset playback state
         self.cycle_accumulator = 0.0;
         self.frame_cycle_count = 0;
         self.paused = false;
@@ -507,11 +485,9 @@ fn bootstrap_cpu(
 ) -> CPU<C64Memory, Nmos6502> {
     let mut memory = C64Memory::new(chip_models[0]);
 
-    // Configure all SIDs
     let sid_configs = build_sid_configs(sid_file, chip_models);
     memory.configure_sids(&sid_configs);
 
-    // Set sampling parameters for all SIDs
     for sid_chip in &mut memory.sids {
         sid_chip
             .sid
@@ -549,7 +525,6 @@ fn mix_sample(sum: i32, sid_count: usize) -> f32 {
 fn run_init(cpu: &mut CPU<C64Memory, Nmos6502>, init_address: u16) -> PlayerResult<()> {
     run_routine(
         cpu,
-        init_address,
         1_000_000,
         PlayerError::InitTimeout {
             steps: 1_000_000,
@@ -561,7 +536,6 @@ fn run_init(cpu: &mut CPU<C64Memory, Nmos6502>, init_address: u16) -> PlayerResu
 fn run_play(cpu: &mut CPU<C64Memory, Nmos6502>, play_address: u16) -> PlayerResult<()> {
     run_routine(
         cpu,
-        play_address,
         100_000,
         PlayerError::PlayTimeout {
             steps: 100_000,
@@ -572,7 +546,6 @@ fn run_play(cpu: &mut CPU<C64Memory, Nmos6502>, play_address: u16) -> PlayerResu
 
 fn run_routine(
     cpu: &mut CPU<C64Memory, Nmos6502>,
-    address: u16,
     max_steps: u32,
     timeout_err: PlayerError,
 ) -> PlayerResult<()> {
@@ -584,7 +557,6 @@ fn run_routine(
         cpu.single_step();
         steps += 1;
     }
-    let _ = address; // address kept for symmetry; timeout carries it
     Err(timeout_err)
 }
 

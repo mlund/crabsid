@@ -71,8 +71,8 @@ fn parse_subsong(s: &str) -> (&str, Option<u16>) {
     (s, None)
 }
 
-/// Extracts filename from path or URL.
-fn extract_filename(path: &str) -> String {
+/// Extracts filename from path or URL. Handles both unix and windows separators.
+pub fn extract_filename(path: &str) -> String {
     path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
 }
 
@@ -89,26 +89,18 @@ fn load_from_url(url: &str) -> io::Result<SidFile> {
 }
 
 /// A playlist of SID tunes loaded from an m3u file.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Playlist {
     pub entries: Vec<PlaylistEntry>,
 }
 
 impl Playlist {
-    /// Creates an empty playlist.
-    #[allow(dead_code)]
-    pub fn new() -> Self {
-        Self {
-            entries: Vec::new(),
-        }
-    }
-
     /// Loads a playlist from an m3u file, creating with defaults if file doesn't exist.
     pub fn load_or_create<P: AsRef<Path>>(path: P) -> io::Result<Self> {
-        if path.as_ref().exists() {
-            Self::load(path)
-        } else {
-            Ok(Self::with_defaults())
+        match Self::load(path) {
+            Ok(playlist) => Ok(playlist),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Self::with_defaults()),
+            Err(e) => Err(e),
         }
     }
 

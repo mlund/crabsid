@@ -6,6 +6,9 @@ use residfp::{ChipModel, Sid};
 
 const RAM_SIZE: usize = 65536;
 const SID_REGISTER_COUNT: u16 = 0x20;
+// SIDs live anywhere in $D400..=$D7FF; everything else can skip the SID scan.
+const SID_RANGE_START: u16 = 0xD400;
+const SID_RANGE_END: u16 = 0xD800;
 
 /// A SID chip with its base memory address.
 pub struct SidChip {
@@ -81,6 +84,9 @@ impl C64Memory {
 
 impl Bus for C64Memory {
     fn get_byte(&mut self, addr: u16) -> u8 {
+        if !(SID_RANGE_START..SID_RANGE_END).contains(&addr) {
+            return self.ram[addr as usize];
+        }
         for sid_chip in &mut self.sids {
             if sid_chip.contains(addr) {
                 #[allow(clippy::cast_possible_truncation)]
@@ -91,6 +97,10 @@ impl Bus for C64Memory {
     }
 
     fn set_byte(&mut self, addr: u16, val: u8) {
+        if !(SID_RANGE_START..SID_RANGE_END).contains(&addr) {
+            self.ram[addr as usize] = val;
+            return;
+        }
         for sid_chip in &mut self.sids {
             if sid_chip.contains(addr) {
                 #[allow(clippy::cast_possible_truncation)]

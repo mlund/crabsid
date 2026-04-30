@@ -44,7 +44,7 @@ pub fn handle_key(app: &mut App, key: KeyCode) -> Option<io::Result<()>> {
         KeyCode::Tab => app.toggle_browser_focus(),
         KeyCode::Char('/') => app.start_hvsc_search(),
 
-        KeyCode::Char(c @ '1'..='9') => app.goto_song(c.to_digit(10).unwrap() as u16),
+        KeyCode::Char(c @ '1'..='9') => app.goto_song((c as u16) - ('0' as u16)),
         KeyCode::Char('+' | 'n') => app.next_song(),
         KeyCode::Char('-' | 'p') => app.prev_song(),
 

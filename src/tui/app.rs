@@ -5,7 +5,7 @@
 
 use crate::hvsc::{HvscBrowser, HvscEntry};
 use crate::player::SharedPlayer;
-use crate::playlist::Playlist;
+use crate::playlist::{Playlist, extract_filename};
 use crate::sid_file::SidFile;
 use ratatui::widgets::ListState;
 use residfp::ChipModel;
@@ -181,11 +181,11 @@ impl<'a> App<'a> {
     }
 
     pub fn update(&mut self) {
+        // chip_models only changes via switch_chip / play_sid_file — no need to clone every frame.
         let playback_error = if let Ok(mut player) = self.player.lock() {
             self.vu_meter.update(&player.voice_levels());
             self.voice_scopes.update(&player.envelope_samples());
             self.paused = player.is_paused();
-            self.chip_models = player.chip_models().to_vec();
             player.take_error()
         } else {
             None
@@ -278,13 +278,17 @@ impl<'a> App<'a> {
             self.show_error(msg);
         }
 
-        let md5 = self
-            .current_browser_sid
-            .as_ref()
-            .map(|s| &s.md5)
-            .unwrap_or(&self.sid_file.md5)
-            .clone();
-        self.update_song_timeout(&md5, song);
+        // Avoid &mut self / &str borrow conflict by computing the timeout before reborrowing.
+        let timeout = {
+            let md5 = self
+                .current_browser_sid
+                .as_ref()
+                .map_or(&self.sid_file.md5, |s| &s.md5);
+            self.hvsc_browser
+                .song_duration(md5, song)
+                .unwrap_or(self.default_timeout)
+        };
+        self.song_timeout = timeout;
     }
 
     /// Cycles the chip model for the currently selected SID.
@@ -570,7 +574,7 @@ impl<'a> App<'a> {
             let idx = (start + offset) % len;
             let path = &self.hvsc_search_results[idx];
             let entry = HvscEntry {
-                name: path.rsplit('/').next().unwrap_or(path).to_string(),
+                name: extract_filename(path),
                 path: path.clone(),
                 is_dir: false,
             };

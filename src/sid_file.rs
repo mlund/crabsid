@@ -30,7 +30,6 @@ const OFFSET_THIRD_SID: usize = 0x7B;
 #[derive(Debug)]
 pub struct SidFile {
     /// File format identifier ("PSID" or "RSID")
-    #[allow(dead_code)] // Parsed for format validation
     pub magic: String,
     /// PSID version (1, 2, 3, or 4)
     pub version: u16,
@@ -48,7 +47,6 @@ pub struct SidFile {
     /// Default song to play (1-indexed)
     pub start_song: u16,
     /// Per-song timing flags (bit set = CIA, clear = VBI)
-    #[allow(dead_code)] // For future CIA timing support
     pub speed: u32,
     /// Song title from file header
     pub name: String,

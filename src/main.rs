@@ -89,7 +89,6 @@ fn default_playlist_path() -> PathBuf {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
-    // Load existing playlist or create new one, then append CLI files as absolute paths
     let playlist_path = args.playlist.clone().unwrap_or_else(default_playlist_path);
     let mut playlist = Playlist::load_or_create(&playlist_path)?;
     let mut playlist_modified = false;
@@ -98,23 +97,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         playlist_modified |= playlist.add(&absolute.to_string_lossy(), None);
     }
 
-    // Determine initial SID file to play
+    // With no CLI files and an empty playlist we still need a SID to construct the player;
+    // the TUI starts with HVSC browser focused so the user can pick one immediately.
     let (sid_file, initial_song) = if !args.files.is_empty() {
-        // Play first file from CLI
         let sid = SidFile::load(&args.files[0])?;
         let song = args.song.unwrap_or(sid.start_song);
         (sid, song)
     } else if !playlist.is_empty() {
-        // Play first from playlist
         let entry = &playlist.entries[0];
         let sid = entry.load()?;
         let song = args.song.or(entry.subsong).unwrap_or(sid.start_song);
         (sid, song)
     } else {
-        // Empty playlist, no files - need a dummy SID for player init
-        // TUI will start with HVSC browser focused
-        let dummy = create_silent_sid();
-        (dummy, 1)
+        (create_silent_sid(), 1)
     };
 
     if sid_file.requires_full_emulation() {
@@ -130,7 +125,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .map_err(|e| format!("{e}"))?;
 
-    // Enable EKV filter if requested
     if args.ekv
         && let Ok(mut p) = player.lock()
     {

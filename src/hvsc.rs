@@ -23,10 +23,14 @@ fn fetch_bytes(url: &str) -> io::Result<Vec<u8>> {
     }
 }
 
+/// Latin-1 maps directly to Unicode code points (each byte == codepoint).
+fn decode_latin1(bytes: &[u8]) -> String {
+    bytes.iter().map(|&b| b as char).collect()
+}
+
 /// Fetches text from a URL or local path, treating bytes as Latin-1.
 fn fetch_latin1_text(url: &str) -> io::Result<String> {
-    let bytes = fetch_bytes(url)?;
-    Ok(bytes.iter().map(|&b| b as char).collect())
+    Ok(decode_latin1(&fetch_bytes(url)?))
 }
 
 /// Fetches text from a URL or local path as UTF-8.
@@ -56,8 +60,7 @@ pub fn clear_cache() {
 /// Reads a file as Latin-1 or UTF-8.
 fn read_file(path: &Path, latin1: bool) -> io::Result<String> {
     if latin1 {
-        let bytes = fs::read(path)?;
-        Ok(bytes.iter().map(|&b| b as char).collect())
+        Ok(decode_latin1(&fs::read(path)?))
     } else {
         fs::read_to_string(path)
     }
@@ -67,21 +70,20 @@ fn read_file(path: &Path, latin1: bool) -> io::Result<String> {
 fn fetch_with_cache(url: &str, cache_name: &str, latin1: bool) -> io::Result<String> {
     let cache_path = cache_dir().map(|d| d.join(cache_name));
 
-    // Try cache first
-    if let Some(ref path) = cache_path
-        && path.exists()
-    {
-        return read_file(path, latin1);
+    if let Some(ref path) = cache_path {
+        match read_file(path, latin1) {
+            Ok(content) => return Ok(content),
+            Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
     }
 
-    // Fetch from URL
     let content = if latin1 {
         fetch_latin1_text(url)?
     } else {
         fetch_text(url)?
     };
 
-    // Best-effort caching
     if let Some(path) = cache_path {
         let _ = fs::write(&path, &content);
     }
@@ -101,6 +103,9 @@ pub struct StilEntry {
 #[derive(Debug, Default)]
 pub struct StilDatabase {
     entries: HashMap<String, StilEntry>,
+    // Precomputed lowercase haystack per entry; HVSC has ~50k entries and rebuilding
+    // these per keystroke produces hundreds of thousands of allocations.
+    search_index: Vec<(String, String)>,
 }
 
 impl StilDatabase {
@@ -117,9 +122,7 @@ impl StilDatabase {
         let mut current_entry = StilEntry::default();
 
         for line in content.lines() {
-            // STIL format: path line starts new entry, field lines are indented
             if line.starts_with('/') && line.ends_with(".sid") {
-                // Save previous entry (even without metadata, for search)
                 if let Some(path) = current_path.take() {
                     entries.insert(path, current_entry);
                 }
@@ -128,7 +131,6 @@ impl StilDatabase {
                 continue;
             }
 
-            // Parse field lines
             let trimmed = line.trim_start();
             if let Some(rest) = trimmed.strip_prefix("TITLE:") {
                 current_entry.title = Some(rest.trim().to_string());
@@ -139,12 +141,15 @@ impl StilDatabase {
             }
         }
 
-        // Don't forget last entry
         if let Some(path) = current_path {
             entries.insert(path, current_entry);
         }
 
-        Self { entries }
+        let search_index = build_search_index(&entries);
+        Self {
+            entries,
+            search_index,
+        }
     }
 
     /// Returns the number of entries in the database.
@@ -166,22 +171,30 @@ impl StilDatabase {
     /// Searches paths, titles, and artists for entries containing the query (case-insensitive).
     pub fn search(&self, query: &str) -> Vec<&str> {
         let query_lower = query.to_lowercase();
-        self.entries
+        self.search_index
             .iter()
-            .filter(|(path, entry)| {
-                path.to_lowercase().contains(&query_lower)
-                    || entry
-                        .title
-                        .as_ref()
-                        .is_some_and(|t| t.to_lowercase().contains(&query_lower))
-                    || entry
-                        .artist
-                        .as_ref()
-                        .is_some_and(|a| a.to_lowercase().contains(&query_lower))
-            })
+            .filter(|(_, haystack)| haystack.contains(&query_lower))
             .map(|(path, _)| path.as_str())
             .collect()
     }
+}
+
+fn build_search_index(entries: &HashMap<String, StilEntry>) -> Vec<(String, String)> {
+    entries
+        .iter()
+        .map(|(path, entry)| {
+            let mut haystack = path.to_lowercase();
+            if let Some(t) = &entry.title {
+                haystack.push('\n');
+                haystack.push_str(&t.to_lowercase());
+            }
+            if let Some(a) = &entry.artist {
+                haystack.push('\n');
+                haystack.push_str(&a.to_lowercase());
+            }
+            (path.clone(), haystack)
+        })
+        .collect()
 }
 
 /// Song lengths database mapping MD5 hashes to per-subsong durations.
@@ -201,7 +214,6 @@ impl SonglengthsDatabase {
     fn parse(content: &str) -> Self {
         let mut entries = HashMap::new();
         for line in content.lines() {
-            // Skip comments and empty lines
             if line.starts_with(';') || line.starts_with('[') || line.trim().is_empty() {
                 continue;
             }
@@ -233,12 +245,11 @@ impl SonglengthsDatabase {
 
 /// Parses duration string "mm:ss" or "mm:ss.mmm" into Duration.
 fn parse_duration(s: &str) -> Option<std::time::Duration> {
-    // Remove any trailing attributes like "(G)" or "(M)"
+    // Strip trailing attributes such as "(G)" or "(M)" that HVSC appends to durations.
     let s = s.split('(').next()?.trim();
     let (mins, rest) = s.split_once(':')?;
     let mins: u64 = mins.parse().ok()?;
 
-    // Handle "ss" or "ss.mmm"
     let (secs, millis) = if let Some((s, ms)) = rest.split_once('.') {
         let secs: u64 = s.parse().ok()?;
         let millis: u64 = ms.parse().ok()?;
@@ -337,12 +348,23 @@ impl HvscBrowser {
 
     /// Fetches the STIL and Songlengths databases (from cache if available).
     pub fn load_stil(&mut self) {
-        match StilDatabase::fetch(&self.base_url) {
+        // First-run fetch downloads ~10MB across two URLs; run in parallel to halve the hang.
+        let base_url = self.base_url.as_str();
+        let (stil_result, songlengths_result) = std::thread::scope(|s| {
+            let stil = s.spawn(|| StilDatabase::fetch(base_url));
+            let songlengths = s.spawn(|| SonglengthsDatabase::fetch(base_url));
+            (
+                stil.join().expect("STIL thread"),
+                songlengths.join().expect("Songlengths thread"),
+            )
+        });
+
+        match stil_result {
             Ok(db) => self.stil = Some(db),
             Err(e) => self.stil_error = Some(e.to_string()),
         }
         // Songlengths errors are silently ignored - we just fall back to playtime
-        if let Ok(db) = SonglengthsDatabase::fetch(&self.base_url) {
+        if let Ok(db) = songlengths_result {
             self.songlengths = Some(db);
         }
     }
@@ -487,14 +509,17 @@ fn read_local_directory(base_path: &str, path: &str) -> io::Result<Vec<HvscEntry
         })
         .collect();
 
-    // Sort: directories first, then alphabetically
+    sort_entries(&mut entries);
+    Ok(entries)
+}
+
+/// Sorts entries with directories first, then case-insensitive alphabetical for browsing.
+fn sort_entries(entries: &mut [HvscEntry]) {
     entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
         (true, false) => std::cmp::Ordering::Less,
         (false, true) => std::cmp::Ordering::Greater,
         _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
     });
-
-    Ok(entries)
 }
 
 /// Fetches and parses an HTTP directory listing.
@@ -543,13 +568,7 @@ fn parse_directory_listing(html: &str, base_path: &str) -> Vec<HvscEntry> {
         })
         .collect();
 
-    // Directories first for easier navigation
-    entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
-        (true, false) => std::cmp::Ordering::Less,
-        (false, true) => std::cmp::Ordering::Greater,
-        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-    });
-
+    sort_entries(&mut entries);
     entries
 }
 

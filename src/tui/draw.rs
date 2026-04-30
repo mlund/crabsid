@@ -5,7 +5,7 @@
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Flex, Layout, Rect},
     style::{Color, Modifier, Style},
     symbols::Marker,
     text::{Line, Span},
@@ -15,15 +15,16 @@ use ratatui::{
     },
 };
 use residfp::ChipModel;
+use std::fmt::Write as _;
 
 use super::app::{App, BrowserFocus, Popup};
 use super::theme::{ColorScheme, SCHEMES, c64};
+use crate::playlist::extract_filename;
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let full_area = frame.area();
     let scheme = app.scheme();
 
-    // Fill background with scheme color
     frame.render_widget(
         Block::default().style(Style::default().bg(scheme.background)),
         full_area,
@@ -78,7 +79,7 @@ fn draw_playlist_browser(frame: &mut Frame, area: Rect, app: &mut App) {
         .map(|entry| {
             let mut name = entry.display_name.clone();
             if let Some(sub) = entry.subsong {
-                name.push_str(&format!(" @{sub}"));
+                let _ = write!(name, " @{sub}");
             }
             ListItem::new(name).style(Style::default().fg(scheme.text_primary))
         })
@@ -171,8 +172,7 @@ fn draw_hvsc_search_results(
         .hvsc_search_results
         .iter()
         .map(|path| {
-            let name = path.rsplit('/').next().unwrap_or(path);
-            ListItem::new(name).style(Style::default().fg(scheme.text_primary))
+            ListItem::new(extract_filename(path)).style(Style::default().fg(scheme.text_primary))
         })
         .collect();
 
@@ -323,27 +323,28 @@ fn sid_info_lines(app: &App) -> Vec<Line<'static>> {
 
 /// Formats chip models for display: "[6581]", "[2x SID: 6581+8580]", etc.
 fn format_chip_models(models: &[ChipModel]) -> String {
-    let model_strs: Vec<&str> = models
-        .iter()
-        .map(|m| match m {
-            ChipModel::Mos6581 => "6581",
-            ChipModel::Mos8580 => "8580",
-        })
-        .collect();
+    let names: Vec<&str> = models.iter().map(chip_model_name).collect();
+    match names.as_slice() {
+        [single] => format!("[{single}]"),
+        [..] => format!("[{}x SID: {}]", names.len(), names.join("+")),
+    }
+}
 
-    match models.len() {
-        1 => format!("[{}]", model_strs[0]),
-        2 => format!("[2x SID: {}+{}]", model_strs[0], model_strs[1]),
-        3 => format!(
-            "[3x SID: {}+{}+{}]",
-            model_strs[0], model_strs[1], model_strs[2]
-        ),
-        _ => "[SID]".to_string(),
+const fn chip_model_name(model: &ChipModel) -> &'static str {
+    match model {
+        ChipModel::Mos6581 => "6581",
+        ChipModel::Mos8580 => "8580",
     }
 }
 
 /// Returns the CrabSid logo with fixed C64 rainbow colors.
 fn logo_lines() -> Vec<Line<'static>> {
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<Vec<Line<'static>>> = OnceLock::new();
+    CACHE.get_or_init(build_logo_lines).clone()
+}
+
+fn build_logo_lines() -> Vec<Line<'static>> {
     let crab = Style::default().fg(c64::ORANGE);
     let c = Style::default().fg(c64::LIGHT_RED);
     let r = Style::default().fg(c64::ORANGE);
@@ -750,19 +751,11 @@ fn help_text(scheme: &ColorScheme) -> Vec<Line<'static>> {
 
 /// Creates a centered rectangle for popups.
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let [_, center, _] = Layout::vertical([
-        Constraint::Percentage((100 - percent_y) / 2),
-        Constraint::Percentage(percent_y),
-        Constraint::Percentage((100 - percent_y) / 2),
-    ])
-    .areas(area);
-
-    let [_, center, _] = Layout::horizontal([
-        Constraint::Percentage((100 - percent_x) / 2),
-        Constraint::Percentage(percent_x),
-        Constraint::Percentage((100 - percent_x) / 2),
-    ])
-    .areas(center);
-
-    center
+    let [vertical] = Layout::vertical([Constraint::Percentage(percent_y)])
+        .flex(Flex::Center)
+        .areas(area);
+    let [centered] = Layout::horizontal([Constraint::Percentage(percent_x)])
+        .flex(Flex::Center)
+        .areas(vertical);
+    centered
 }
