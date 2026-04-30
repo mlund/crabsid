@@ -15,7 +15,7 @@ cpal = "0.17"
 crossterm = "0.29"
 dirs = "6"
 md-5 = "0.10"
-mos6502 = "0.8"
+mos6502 = "0.9"
 ratatui = "0.30"
 residfp = { git = "https://github.com/mlund/residfp", features = ["ekv-filter"] }
 serde = { version = "1", features = ["derive"] }
