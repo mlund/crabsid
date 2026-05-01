@@ -7,6 +7,43 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
+/// Test-only mini-assembler shared by the synthetic SID fixtures.
+#[cfg(test)]
+mod fixture_asm {
+    pub const OP_SEI: u8 = 0x78;
+    pub const OP_CLI: u8 = 0x58;
+    pub const OP_LDA_IMM: u8 = 0xA9;
+    pub const OP_LDA_ABS: u8 = 0xAD;
+    pub const OP_STA_ABS: u8 = 0x8D;
+    pub const OP_INC_ABS: u8 = 0xEE;
+    pub const OP_RTI: u8 = 0x40;
+    pub const OP_RTS: u8 = 0x60;
+
+    // CIA1 register addresses our fixture init code writes to.
+    pub const CIA1_TIMER_A_LO: u16 = 0xDC04;
+    pub const CIA1_TIMER_A_HI: u16 = 0xDC05;
+    pub const CIA1_ICR: u16 = 0xDC0D;
+    pub const CIA1_CRA: u16 = 0xDC0E;
+    pub const USER_IRQ_VECTOR_LO: u16 = 0x0314;
+    pub const USER_IRQ_VECTOR_HI: u16 = 0x0315;
+
+    pub const fn lda_imm(val: u8) -> [u8; 2] {
+        [OP_LDA_IMM, val]
+    }
+    pub const fn sta_abs(addr: u16) -> [u8; 3] {
+        let [lo, hi] = addr.to_le_bytes();
+        [OP_STA_ABS, lo, hi]
+    }
+    pub const fn lda_abs(addr: u16) -> [u8; 3] {
+        let [lo, hi] = addr.to_le_bytes();
+        [OP_LDA_ABS, lo, hi]
+    }
+    pub const fn inc_abs(addr: u16) -> [u8; 3] {
+        let [lo, hi] = addr.to_le_bytes();
+        [OP_INC_ABS, lo, hi]
+    }
+}
+
 /// Primary SID register base address on the C64 ($D400).
 pub const PRIMARY_SID_ADDRESS: u16 = 0xD400;
 
@@ -33,7 +70,8 @@ const OFFSET_THIRD_SID: usize = 0x7B;
 /// (title, author, release info) and playback parameters.
 #[derive(Debug)]
 pub struct SidFile {
-    /// File format identifier ("PSID" or "RSID")
+    /// File format identifier ("PSID" or "RSID"). Read by [`SidFile::is_interrupt_driven`].
+    #[allow(dead_code)] // exercised only via a #[cfg(test)] caller in production builds
     pub magic: String,
     /// PSID version (1, 2, 3, or 4)
     pub version: u16,
@@ -124,15 +162,13 @@ impl SidFile {
                 (None, None)
             };
 
-        let data_start = data_offset as usize;
-        if data_start > bytes.len() {
+        let Some(data_slice) = bytes.get(data_offset as usize..) else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Data offset beyond file",
             ));
-        }
-
-        let mut data = bytes[data_start..].to_vec();
+        };
+        let mut data = data_slice.to_vec();
 
         // PSID spec: load_address == 0 means the actual address is stored
         // in the first two bytes of the data section (little-endian C64 format)
@@ -178,8 +214,8 @@ impl SidFile {
     /// Returns true if the song uses CIA timer-based playback instead of VBI.
     ///
     /// Most tunes sync to the vertical blank interrupt (50/60Hz), but some
-    /// use CIA timers for custom playback rates.
-    #[allow(dead_code)] // For future CIA timing support
+    /// use CIA timers for custom playback rates ("2x speed" tunes set this).
+    #[allow(dead_code)] // Public API; player caches `speed` raw to avoid borrowing SidFile in load_song.
     pub const fn uses_cia_timing(&self, song: u16) -> bool {
         if song == 0 || song > 32 {
             return false;
@@ -187,12 +223,14 @@ impl SidFile {
         (self.speed >> (song - 1)) & 1 != 0
     }
 
-    /// Returns true if the file likely requires full C64 emulation.
+    /// Returns true if the tune is interrupt-driven (CIA1 IRQ or KERNAL-emulation).
     ///
-    /// RSID files and interrupt-driven tunes need CIA/VIC emulation
-    /// that this player doesn't provide, so they may fail to initialize.
-    pub fn requires_full_emulation(&self) -> bool {
-        self.magic == "RSID" || self.play_address == 0 || self.speed != 0
+    /// RSID files always set their own IRQ vector during init; PSID files with
+    /// `play_address == 0` are the "PSID with KERNAL emulation" variant and use
+    /// the same path. Either way, the player runs with no per-frame `JSR`.
+    #[allow(dead_code)] // public API, used by tests; production code reads play_address directly
+    pub fn is_interrupt_driven(&self) -> bool {
+        self.magic == "RSID" || self.play_address == 0
     }
 
     /// Returns the number of SID chips used (1, 2, or 3).
@@ -231,6 +269,109 @@ impl SidFile {
             ChipModel::Mos8580
         } else {
             ChipModel::Mos6581
+        }
+    }
+
+    /// A minimal PSID fixture with the `speed` bit set for song 1 (PSID-CIA mode).
+    /// `init` arms CIA1 Timer A but does NOT install an IRQ vector — by PSID-CIA
+    /// convention the player polls the underflow flag and drives `play()` itself.
+    /// `play` increments a counter at `$0400` so tests can verify it ran.
+    #[cfg(test)]
+    pub fn psid_cia_test_fixture() -> Self {
+        use fixture_asm::*;
+        const LOAD_ADDR: u16 = 0x1000;
+        const PLAY_ADDR: u16 = LOAD_ADDR + 0x40;
+        const COUNTER_ADDR: u16 = 0x0400;
+        const TIMER_LATCH: u16 = 0x0400;
+
+        let mut code: Vec<u8> = Vec::new();
+        // init: just program the timer — no SEI/CLI, no IRQ vector install.
+        code.extend_from_slice(&lda_imm(TIMER_LATCH as u8));
+        code.extend_from_slice(&sta_abs(CIA1_TIMER_A_LO));
+        code.extend_from_slice(&lda_imm((TIMER_LATCH >> 8) as u8));
+        code.extend_from_slice(&sta_abs(CIA1_TIMER_A_HI));
+        code.extend_from_slice(&lda_imm(crate::cia::CRA_START | crate::cia::CRA_FORCE_LOAD));
+        code.extend_from_slice(&sta_abs(CIA1_CRA));
+        code.push(OP_RTS);
+
+        // play (called by player on each CIA underflow): bump the counter, return.
+        let play_offset = (PLAY_ADDR - LOAD_ADDR) as usize;
+        code.resize(play_offset, 0);
+        code.extend_from_slice(&inc_abs(COUNTER_ADDR));
+        code.push(OP_RTS);
+
+        // Speed bit 0 set → song 1 is CIA-driven.
+        Self::test_skeleton("PSID", PLAY_ADDR, 1, code)
+    }
+
+    /// A minimal RSID-format fixture for testing the CIA-IRQ playback path.
+    ///
+    /// Synthesises a tiny program: `init` installs an IRQ handler at `$1040` and
+    /// arms CIA1 Timer A; the handler increments a counter at `$0400` then ack's
+    /// the CIA ICR. Tests read `memory.ram_byte($0400)` to verify IRQs fired.
+    #[cfg(test)]
+    pub fn rsid_test_fixture() -> Self {
+        use fixture_asm::*;
+        const LOAD_ADDR: u16 = 0x1000;
+        const HANDLER_ADDR: u16 = LOAD_ADDR + 0x40;
+        const COUNTER_ADDR: u16 = 0x0400;
+        // Latch ~1024 cycles → IRQ every ~1ms; several fires per audio buffer.
+        const TIMER_LATCH: u16 = 0x0400;
+
+        let mut code: Vec<u8> = Vec::new();
+        // SEI: block IRQs while we install the vector.
+        code.push(OP_SEI);
+        // Install user IRQ handler at $0314/$0315.
+        code.extend_from_slice(&lda_imm(HANDLER_ADDR as u8));
+        code.extend_from_slice(&sta_abs(USER_IRQ_VECTOR_LO));
+        code.extend_from_slice(&lda_imm((HANDLER_ADDR >> 8) as u8));
+        code.extend_from_slice(&sta_abs(USER_IRQ_VECTOR_HI));
+        // Configure CIA1 Timer A latch and arm the timer + IRQ.
+        code.extend_from_slice(&lda_imm(TIMER_LATCH as u8));
+        code.extend_from_slice(&sta_abs(CIA1_TIMER_A_LO));
+        code.extend_from_slice(&lda_imm((TIMER_LATCH >> 8) as u8));
+        code.extend_from_slice(&sta_abs(CIA1_TIMER_A_HI));
+        code.extend_from_slice(&lda_imm(crate::cia::CRA_START | crate::cia::CRA_FORCE_LOAD));
+        code.extend_from_slice(&sta_abs(CIA1_CRA));
+        code.extend_from_slice(&lda_imm(crate::cia::ICR_FILL_BIT | crate::cia::ICR_TIMER_A));
+        code.extend_from_slice(&sta_abs(CIA1_ICR));
+        code.push(OP_CLI);
+        code.push(OP_RTS);
+
+        // Pad to handler offset, then emit the IRQ handler.
+        let handler_offset = (HANDLER_ADDR - LOAD_ADDR) as usize;
+        code.resize(handler_offset, 0);
+        code.extend_from_slice(&inc_abs(COUNTER_ADDR));
+        code.extend_from_slice(&lda_abs(CIA1_ICR)); // ack so the IRQ line drops
+        code.push(OP_RTI);
+
+        // RSID convention: play_address is 0; tunes drive playback via IRQ.
+        Self::test_skeleton("RSID", 0, 0, code)
+    }
+
+    /// Common shell for both fixtures — collapses the 14-field struct literal so
+    /// the fixtures themselves only show the bits that vary (magic, play_address,
+    /// speed bitmap, code).
+    #[cfg(test)]
+    fn test_skeleton(magic: &str, play_address: u16, speed: u32, data: Vec<u8>) -> Self {
+        Self {
+            magic: magic.to_string(),
+            version: 2,
+            data_offset: 0x7c,
+            load_address: 0x1000,
+            init_address: 0x1000,
+            play_address,
+            songs: 1,
+            start_song: 1,
+            speed,
+            name: String::new(),
+            author: String::new(),
+            released: String::new(),
+            flags: 0,
+            data,
+            md5: String::new(),
+            second_sid_address: None,
+            third_sid_address: None,
         }
     }
 

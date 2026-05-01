@@ -5,8 +5,8 @@ use crate::memory::C64Memory;
 use crate::sid_file::SidFile;
 use mos6502::cpu::CPU;
 use mos6502::instruction::Nmos6502;
-use mos6502::memory::Bus;
-use mos6502::registers::StackPointer;
+use mos6502::memory::{Bus, IRQ_INTERRUPT_VECTOR_HI, IRQ_INTERRUPT_VECTOR_LO};
+use mos6502::registers::{StackPointer, Status};
 pub use residfp::SamplingMethod;
 use residfp::{ChipModel, clock};
 use std::sync::{Arc, Mutex};
@@ -23,9 +23,31 @@ const ENVELOPE_SAMPLE_DIVISOR: usize = 4;
 /// where we plant an RTS opcode to halt single-stepping cleanly.
 const STACK_HIGH: u16 = 0x01FF;
 const STACK_LOW: u16 = 0x01FE;
+const STACK_BASE: u16 = 0x0100;
 const STACK_SENTINEL: u8 = 0xFF;
 const STACK_POINTER_INIT: u8 = 0xFD;
 const RTS_OPCODE: u8 = 0x60;
+/// Where the CPU's PC parks when no init/play routine is running.
+/// Init returns here (we exit `run_init`); PSID play routines RTS here too.
+const SENTINEL_PC: u16 = 0x0000;
+/// Cycle limit for a single play-routine call. Replaces the prior 100k step limit
+/// (~3 cycles per instruction average → 300k cycles is the cycle equivalent).
+const MAX_PLAY_CYCLES: u64 = 300_000;
+/// Nominal 6502 IRQ entry cost (3 stack pushes + 2 vector reads).
+const IRQ_ENTRY_CYCLES: u64 = 7;
+
+/// How the play routine gets driven for the current tune.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DriveMode {
+    /// PSID with `speed` bit clear: kick `play()` every PAL/NTSC frame.
+    Frame,
+    /// PSID with `speed` bit set: poll CIA1 Timer A; tune sets the latch.
+    /// The "2x speed" tunes in HVSC pick this path.
+    PsidCia,
+    /// RSID (or PSID with `play_address == 0`): tune installs its own IRQ vector;
+    /// mos6502 services CIA IRQ via the KERNAL stub.
+    Interrupt,
+}
 
 /// SID music player combining 6502 CPU and SID chip emulation.
 ///
@@ -69,6 +91,18 @@ pub struct Player {
     playback_error: Option<String>,
     /// Resampling method for SID audio output
     sampling_method: SamplingMethod,
+    /// Cycles since the CPU last left `SENTINEL_PC`; reset when it returns. Catches
+    /// runaway play routines and IRQ handlers stuck in a tight loop.
+    cpu_busy_cycles: u64,
+    /// Recomputed from `speed_flags` and the current song each time the song or
+    /// file changes — speed bits are per-song so a "1x" track followed by a "2x"
+    /// track in the same file must re-derive.
+    drive_mode: DriveMode,
+    /// Set once at file-load. Skips the speed-flag check for RSID-style tunes.
+    is_interrupt_driven: bool,
+    /// Cached `SidFile::speed` so `load_song` can re-derive the drive mode without
+    /// holding a `SidFile` reference.
+    speed_flags: u32,
 }
 
 /// Errors that can occur while initializing or running SID routines.
@@ -76,8 +110,9 @@ pub struct Player {
 pub enum PlayerError {
     /// The init routine never returned before the step limit.
     InitTimeout { steps: u32, address: u16 },
-    /// The play routine never returned before the step limit.
-    PlayTimeout { steps: u32, address: u16 },
+    /// Init wrote to hardware we don't emulate (VIC raster IRQ, CIA2 NMI).
+    /// The tune may technically be playable but our minimal emulator can't drive it.
+    UnsupportedHardware { addresses: Vec<u16> },
 }
 
 impl fmt::Display for PlayerError {
@@ -86,14 +121,19 @@ impl fmt::Display for PlayerError {
             Self::InitTimeout { steps, address } => {
                 write!(
                     f,
-                    "SID init routine at ${address:04X} exceeded {steps} steps \
-                    (may require CIA/interrupt emulation)"
+                    "SID init routine at ${address:04X} exceeded {steps} steps"
                 )
             }
-            Self::PlayTimeout { steps, address } => {
+            Self::UnsupportedHardware { addresses } => {
+                let list = addresses
+                    .iter()
+                    .map(|a| format!("${a:04X}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 write!(
                     f,
-                    "SID play routine at ${address:04X} exceeded {steps} steps"
+                    "Tune writes to unsupported hardware ({list}) — likely needs \
+                    VIC raster IRQ or CIA2 NMI emulation"
                 )
             }
         }
@@ -136,13 +176,14 @@ impl Player {
         );
 
         run_init(&mut cpu, sid_file.init_address)?;
+        check_supported_hardware(&cpu)?;
 
         let voice_count = chip_models.len() * 3;
         let envelope_history = (0..voice_count)
             .map(|_| Box::new([0.0; SCOPE_BUFFER_SIZE]))
             .collect();
 
-        Ok(Self {
+        let mut player = Self {
             cpu,
             play_address: sid_file.play_address,
             init_address: sid_file.init_address,
@@ -161,13 +202,19 @@ impl Player {
             sample_rate,
             playback_error: None,
             sampling_method,
-        })
+            cpu_busy_cycles: 0,
+            drive_mode: DriveMode::Frame,
+            is_interrupt_driven: sid_file.is_interrupt_driven(),
+            speed_flags: sid_file.speed,
+        };
+        player.apply_drive_mode(song);
+        Ok(player)
     }
 
     /// Fills the buffer with audio samples, advancing emulation accordingly.
     ///
-    /// Each sample triggers the appropriate number of CPU/SID clock cycles
-    /// to maintain cycle-accurate timing between the 1MHz system and audio rate.
+    /// Cycle-accurate: every CPU instruction is single-stepped, and CIA/SID/audio
+    /// timers all advance by the same `elapsed` cycle delta from `cpu.cycles`.
     /// On error, auto-pauses and stores error message for TUI to display.
     pub fn fill_buffer(&mut self, buffer: &mut [f32]) {
         if self.paused || self.playback_error.is_some() {
@@ -179,25 +226,11 @@ impl Player {
 
         for sample in buffer.iter_mut() {
             self.cycle_accumulator += self.cycles_per_sample;
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let cycles_to_run = self.cycle_accumulator as u32;
-            self.cycle_accumulator -= f64::from(cycles_to_run);
-
-            for _ in 0..cycles_to_run {
-                if self.frame_cycle_count >= self.cycles_per_frame {
-                    self.frame_cycle_count = 0;
-                    if let Err(e) = self.call_play() {
-                        self.playback_error = Some(e.to_string());
-                        self.paused = true;
-                        buffer.fill(0.0);
-                        return;
-                    }
+            while self.cycle_accumulator >= 1.0 {
+                if !self.advance_one_step() {
+                    buffer.fill(0.0);
+                    return;
                 }
-
-                for sid_chip in &mut self.cpu.memory.sids {
-                    sid_chip.sid.clock();
-                }
-                self.frame_cycle_count += 1;
             }
 
             let sum: i32 = self
@@ -211,6 +244,117 @@ impl Player {
 
             self.capture_envelope_history();
         }
+    }
+
+    /// Drives the emulator forward by one CPU instruction (or one idle cycle when no
+    /// routine is running) and ticks all per-cycle peripherals by the same delta.
+    /// Returns `false` to halt the buffer (runaway routine, etc.).
+    fn advance_one_step(&mut self) -> bool {
+        let at_sentinel = self.cpu.registers.program_counter == SENTINEL_PC;
+
+        // Only RSID-style tunes route CIA IRQs through mos6502's vector. PSID
+        // (frame or CIA-poll) keeps the CPU at the sentinel and the player
+        // dispatches play() directly.
+        let irq_at_sentinel = at_sentinel
+            && self.drive_mode == DriveMode::Interrupt
+            && self.cpu.memory.irq_pending()
+            && !self
+                .cpu
+                .registers
+                .status
+                .contains(Status::PS_DISABLE_INTERRUPTS);
+
+        let elapsed = if irq_at_sentinel {
+            // Manually vector — single-stepping the RTS at $0000 would pop garbage.
+            self.force_irq_service();
+            IRQ_ENTRY_CYCLES
+        } else if at_sentinel {
+            1
+        } else {
+            let prev = self.cpu.cycles;
+            self.cpu.single_step();
+            self.cpu.cycles - prev
+        };
+
+        // Frame-mode tunes never observe CIA1, so skip the timer arithmetic entirely.
+        if self.drive_mode != DriveMode::Frame {
+            self.cpu.memory.tick(elapsed);
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let elapsed_u32 = elapsed as u32;
+        for sid_chip in &mut self.cpu.memory.sids {
+            sid_chip.sid.clock_delta(elapsed_u32);
+        }
+
+        self.cycle_accumulator -= elapsed as f64;
+        self.frame_cycle_count = self.frame_cycle_count.saturating_add(elapsed_u32);
+
+        // PC away from the sentinel = a play routine or IRQ handler is running;
+        // a too-long stretch trips the runaway-routine timeout.
+        if self.cpu.registers.program_counter != SENTINEL_PC {
+            self.cpu_busy_cycles = self.cpu_busy_cycles.saturating_add(elapsed);
+            if self.cpu_busy_cycles > MAX_PLAY_CYCLES {
+                self.playback_error = Some(format!(
+                    "CPU stuck for {MAX_PLAY_CYCLES} cycles at PC=${:04X}",
+                    self.cpu.registers.program_counter
+                ));
+                self.paused = true;
+                return false;
+            }
+            return true;
+        }
+        self.cpu_busy_cycles = 0;
+
+        if self.should_kick_play() {
+            reset_stack_pointer(&mut self.cpu);
+            self.cpu.registers.program_counter = self.play_address;
+        }
+
+        true
+    }
+
+    /// True when the CPU is idle at the sentinel and the active drive-mode says
+    /// it's time to invoke `play()`. RSID/Interrupt mode never kicks here — it
+    /// services the IRQ via the CPU vector path instead.
+    fn should_kick_play(&mut self) -> bool {
+        if self.play_address == 0 {
+            return false;
+        }
+        match self.drive_mode {
+            DriveMode::Frame => {
+                if self.frame_cycle_count >= self.cycles_per_frame {
+                    self.frame_cycle_count -= self.cycles_per_frame;
+                    true
+                } else {
+                    false
+                }
+            }
+            DriveMode::PsidCia => self.cpu.memory.cia1_take_timer_a_underflow(),
+            DriveMode::Interrupt => false,
+        }
+    }
+
+    /// Mimics mos6502's `service_interrupt` without executing whatever opcode lives
+    /// at the current PC. Used to wake the CPU from the sentinel when CIA1 fires.
+    fn force_irq_service(&mut self) {
+        let [pc_lo, pc_hi] = self.cpu.registers.program_counter.to_le_bytes();
+        self.push_byte(pc_hi);
+        self.push_byte(pc_lo);
+        let status = self.cpu.registers.status & !Status::PS_BRK;
+        self.push_byte(status.bits());
+        self.cpu
+            .registers
+            .status
+            .insert(Status::PS_DISABLE_INTERRUPTS);
+        let lo = self.cpu.memory.get_byte(IRQ_INTERRUPT_VECTOR_LO);
+        let hi = self.cpu.memory.get_byte(IRQ_INTERRUPT_VECTOR_HI);
+        self.cpu.registers.program_counter = u16::from_le_bytes([lo, hi]);
+    }
+
+    fn push_byte(&mut self, val: u8) {
+        let sp = self.cpu.registers.stack_pointer.0;
+        self.cpu.memory.set_byte(STACK_BASE | u16::from(sp), val);
+        self.cpu.registers.stack_pointer = StackPointer(sp.wrapping_sub(1));
     }
 
     /// Captures envelope history at reduced rate for oscilloscope display.
@@ -245,11 +389,9 @@ impl Player {
         self.envelope_history
             .iter()
             .map(|history| {
-                history[self.envelope_write_pos..]
-                    .iter()
-                    .chain(&history[..self.envelope_write_pos])
-                    .copied()
-                    .collect()
+                // Older samples sit after the write head; chain them in front of the newer prefix.
+                let (head, tail) = history.split_at(self.envelope_write_pos);
+                tail.iter().chain(head).copied().collect()
             })
             .collect()
     }
@@ -278,13 +420,11 @@ impl Player {
         self.init_address = sid_file.init_address;
         self.load_address = sid_file.load_address;
         self.sid_data = sid_file.data.clone();
+        self.is_interrupt_driven = sid_file.is_interrupt_driven();
+        self.speed_flags = sid_file.speed;
 
         self.chip_models = sid_file.preferred_chip_models(None);
-        let sid_configs: Vec<(u16, ChipModel)> = sid_file
-            .sid_addresses()
-            .into_iter()
-            .zip(self.chip_models.iter().copied())
-            .collect();
+        let sid_configs = build_sid_configs(sid_file, &self.chip_models);
         self.cpu.memory.configure_sids(&sid_configs);
 
         for sid_chip in &mut self.cpu.memory.sids {
@@ -324,12 +464,33 @@ impl Player {
         self.cpu.registers.program_counter = self.init_address;
 
         run_init(&mut self.cpu, self.init_address)?;
+        check_supported_hardware(&self.cpu)?;
+
+        // Drive mode is per-song (PSID `speed` is a 32-bit-per-song bitmap), so
+        // re-derive even for an in-file song change.
+        self.apply_drive_mode(song);
 
         self.cycle_accumulator = 0.0;
         self.frame_cycle_count = 0;
+        self.cpu_busy_cycles = 0;
         self.paused = false;
         self.playback_error = None;
         Ok(())
+    }
+
+    /// Picks the play-dispatch mode for `song` and pushes the bus IRQ-routing flag
+    /// in lockstep so PSID modes never see mos6502 service a CIA IRQ.
+    fn apply_drive_mode(&mut self, song: u16) {
+        self.drive_mode = if self.is_interrupt_driven {
+            DriveMode::Interrupt
+        } else if cia_timing_for_song(self.speed_flags, song) {
+            DriveMode::PsidCia
+        } else {
+            DriveMode::Frame
+        };
+        self.cpu
+            .memory
+            .set_cia_irq_routed(self.drive_mode == DriveMode::Interrupt);
     }
 
     /// Returns envelope levels (0-255) for all SID voices.
@@ -400,20 +561,14 @@ impl Player {
         let chip = self.cpu.memory.sids.get_mut(sid_index)?;
         Some(chip.sid.toggle_ekv_filter())
     }
+}
 
-    fn call_play(&mut self) -> PlayerResult<()> {
-        // play_address == 0 means the tune uses IRQ-driven playback
-        if self.play_address == 0 {
-            return Ok(());
-        }
-
-        // Reset stack each call: some tunes don't balance JSR/RTS over their lifetime.
-        reset_stack_pointer(&mut self.cpu);
-        self.cpu.registers.program_counter = self.play_address;
-
-        run_play(&mut self.cpu, self.play_address)?;
-        Ok(())
+/// PSID `speed` field is a per-song bitmap (bit n = song n+1, 1 = CIA timer).
+fn cia_timing_for_song(speed_flags: u32, song: u16) -> bool {
+    if song == 0 || song > 32 {
+        return false;
     }
+    (speed_flags >> (song - 1)) & 1 != 0
 }
 
 fn timing_from_file(sid_file: &SidFile) -> (u32, u32) {
@@ -466,7 +621,7 @@ fn bootstrap_cpu(
 
 fn setup_stack_for_rts(cpu: &mut CPU<C64Memory, Nmos6502>) {
     // Tunes expect JSR/RTS pairing; plant an RTS at $0000 and a $FFFF return on the stack.
-    cpu.memory.set_byte(0x0000, RTS_OPCODE);
+    cpu.memory.set_byte(SENTINEL_PC, RTS_OPCODE);
     reset_stack_pointer(cpu);
 }
 
@@ -495,17 +650,8 @@ fn run_init(cpu: &mut CPU<C64Memory, Nmos6502>, init_address: u16) -> PlayerResu
     )
 }
 
-fn run_play(cpu: &mut CPU<C64Memory, Nmos6502>, play_address: u16) -> PlayerResult<()> {
-    run_routine(
-        cpu,
-        100_000,
-        PlayerError::PlayTimeout {
-            steps: 100_000,
-            address: play_address,
-        },
-    )
-}
-
+/// Runs the CPU synchronously until PC reaches `SENTINEL_PC` or the step limit is hit.
+/// Used only for the init routine; in-flight `fill_buffer` uses cycle-accurate stepping.
 fn run_routine(
     cpu: &mut CPU<C64Memory, Nmos6502>,
     max_steps: u32,
@@ -513,13 +659,25 @@ fn run_routine(
 ) -> PlayerResult<()> {
     let mut steps = 0;
     while steps < max_steps {
-        if cpu.registers.program_counter == 0x0000 {
+        if cpu.registers.program_counter == SENTINEL_PC {
             return Ok(());
         }
         cpu.single_step();
         steps += 1;
     }
     Err(timeout_err)
+}
+
+/// Refuses tunes whose init touched VIC raster IRQ or CIA2 NMI registers.
+fn check_supported_hardware(cpu: &CPU<C64Memory, Nmos6502>) -> PlayerResult<()> {
+    let traps = cpu.memory.unsupported_hardware();
+    if traps.is_empty() {
+        Ok(())
+    } else {
+        Err(PlayerError::UnsupportedHardware {
+            addresses: traps.to_vec(),
+        })
+    }
 }
 
 /// Thread-safe handle for sharing the player between audio and UI threads.
@@ -627,7 +785,7 @@ mod tests {
             Player::new(&sid, 1, 44_100, None, SamplingMethod::Fast).expect("player init");
 
         for reg in 0..=0x18 {
-            first_sid_mut!(player).write(reg, reg as u8);
+            first_sid_mut!(player).write(reg, reg);
         }
         let before = first_sid!(player).read_state();
 
@@ -670,5 +828,52 @@ mod tests {
         assert!(max_abs <= 0.9996, "mix exceeded headroom: {max_abs}");
         assert!(max_i16 < i16::MAX, "scaled samples hit i16::MAX");
         assert!(min_i16 > i16::MIN, "scaled samples hit i16::MIN");
+    }
+
+    /// PSID with the speed bit set: player polls CIA1 Timer A underflow and
+    /// drives `play()` itself. Verifies the "2x speed" tune family no longer
+    /// runs at 50Hz when the tune asked for a faster rate.
+    #[test]
+    fn psid_cia_fixture_play_is_polled_at_cia_rate() {
+        let sid = SidFile::psid_cia_test_fixture();
+        assert!(sid.uses_cia_timing(1));
+        let mut player =
+            Player::new(&sid, 1, 44_100, None, SamplingMethod::Fast).expect("PSID-CIA player init");
+
+        const COUNTER_ADDR: u16 = 0x0400;
+        assert_eq!(player.cpu.memory.ram_byte(COUNTER_ADDR), 0);
+
+        let mut buffer = vec![0.0f32; 1024];
+        player.fill_buffer(&mut buffer);
+
+        assert!(
+            player.cpu.memory.ram_byte(COUNTER_ADDR) > 0,
+            "play() was not called by the CIA-poll path"
+        );
+    }
+
+    /// CIA Timer A drives the IRQ; the handler increments `$0400`. After a single
+    /// audio buffer fill, the counter must be non-zero — proves both that init's
+    /// IRQ-vector install survived and that mos6502 is fetching `$FFFE/$FFFF`
+    /// through the KERNAL stub.
+    #[test]
+    fn rsid_fixture_handler_runs_via_cia_irq() {
+        let sid = SidFile::rsid_test_fixture();
+        assert!(sid.is_interrupt_driven(), "fixture must be RSID");
+
+        let mut player =
+            Player::new(&sid, 1, 44_100, None, SamplingMethod::Fast).expect("RSID player init");
+
+        const COUNTER_ADDR: u16 = 0x0400;
+        assert_eq!(player.cpu.memory.ram_byte(COUNTER_ADDR), 0);
+
+        // ~22000 CPU cycles per fill, latch=1024, so the handler should fire ~20×.
+        let mut buffer = vec![0.0f32; 1024];
+        player.fill_buffer(&mut buffer);
+
+        assert!(
+            player.cpu.memory.ram_byte(COUNTER_ADDR) > 0,
+            "CIA1 IRQ handler did not run during fill_buffer"
+        );
     }
 }

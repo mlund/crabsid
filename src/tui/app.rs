@@ -426,11 +426,6 @@ impl<'a> App<'a> {
 
     /// Attempts to play a SID file. Returns true on success, false on failure.
     fn play_sid_file(&mut self, sid_file: SidFile, song: u16, source: String) -> bool {
-        if sid_file.requires_full_emulation() {
-            self.show_error("Skipped: Unsupported RSID-like format".to_string());
-            return false;
-        }
-
         self.current_song = song;
         self.total_songs = sid_file.songs;
 

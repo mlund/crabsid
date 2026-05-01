@@ -6,6 +6,7 @@
 #![deny(missing_docs)]
 
 mod audio;
+mod cia;
 mod config;
 mod hvsc;
 mod memory;
@@ -109,10 +110,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         (SidFile::silent(), 1)
     };
-
-    if sid_file.requires_full_emulation() {
-        return Err("Unsupported RSID-like format (requires CIA/interrupt emulation)".into());
-    }
 
     let chip_override = args.chip.map(|n| match n {
         8580 => ChipModel::Mos8580,

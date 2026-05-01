@@ -10,10 +10,11 @@ A TUI and command-line SID music player for C64 SID music playback. Written in R
 
 ## Features
 
-- 🎵 **PSID Playback** — Plays PSID format files (RSID/CIA-driven tunes require full C64 emulation)
+- 🎵 **PSID & RSID Playback** — Frame-driven PSID, CIA-driven PSID ("2x speed" tunes), and RSID files with IRQ-vector dispatch via a minimal KERNAL stub
 - 🔊 **Multi-SID Support** — 2SID and 3SID tunes (PSID v3+) with 6-9 voices
 - 🎛️ **Dual Chip Emulation** — MOS 6581 and MOS 8580 SID chip support
 - ⚙️ **MOS 6502 CPU** — Full emulation with illegal opcodes
+- 🔁 **CIA1 Timer A** — Cycle-accurate, drives interrupt-based playback
 - 🌍 **PAL/NTSC Timing** — Auto-detection from file headers
 - ⏭️ **Multi-Song Navigation** — Prev/next subsong controls
 - 🌐 **HVSC Browser** — Browse and stream directly from the High Voltage SID Collection
@@ -26,7 +27,7 @@ A TUI and command-line SID music player for C64 SID music playback. Written in R
   - 〰️ Oscilloscope displaying envelope waveforms for all voices
   - 🔄 Real-time chip model switching (per-SID for multi-SID tunes)
   - 🎨 Color schemes (C64, Dracula, Monokai, Gruvbox, and more)
-- 🦀 **Written in Rust**
+- 🦀 **Written in Rust** with shameless use of coding agents
 
 ## Installation
 
@@ -117,10 +118,13 @@ flowchart TB
 
     subgraph Core["Emulation Core"]
         CPU[MOS 6502 CPU<br/>mos6502]
-        MEM[C64 Memory<br/>64KB RAM]
+        MEM[C64 Memory<br/>64KB RAM + KERNAL stub]
         SIDCHIP[SID Chips 1-3<br/>resid-rs]
+        CIA[CIA1 Timer A<br/>IRQ source]
         CPU <--> MEM
         MEM <--> SIDCHIP
+        MEM <--> CIA
+        CIA -.IRQ.-> CPU
     end
 
     subgraph Player["Player Thread"]
@@ -158,8 +162,20 @@ flowchart TB
     SIDCHIP -->|levels| VU
 ```
 
+## Limitations
+
+The emulator implements the minimum needed for CIA1-driven RSID and PSID tunes — roughly 80% of HVSC. Tunes outside this scope fail cleanly.
+
+Out of scope today:
+
+- **VIC raster IRQ** (`$D012` / `$D019` / `$D01A`) — tunes that sync playback to specific raster lines (common in demoscene SIDs).
+- **CIA2 NMI** (`$DD0D`) — used by sample/digi tunes and some demos.
+- **Full KERNAL ROM** — only the 8KB IRQ-trampoline stub is provided. Tunes that `JSR` into KERNAL routines beyond `$FF48`/`$EA31` (character output, file I/O, math) hit an `RTS` no-op.
+- **LORAM / CHAREN banking** — only HIRAM is wired up; BASIC ROM and CHARROM stay banked out.
+- **CIA Timer B, TOD, serial, keyboard ports** — stubbed; reads return floating bus, writes are accepted but have no effect.
+
 ## License
 
-The `crabsid` crate is licensed under the GNU General Public License v3.0 due to its dependency on `resid-rs` which is GPLv3 licensed.
+The `crabsid` crate is licensed under the GNU General Public License v3.0 due to its dependency on `resid-rs`
 
 Individual source files are MIT licensed.

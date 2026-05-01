@@ -8,12 +8,13 @@ use std::path::Path;
 
 /// Default songs for a new playlist.
 const DEFAULT_PLAYLIST: &[&str] = &[
-    "https://hvsc.brona.dk/HVSC/C64Music/MUSICIANS/L/Lft/To_Die_For.sid",
-    "https://hvsc.brona.dk/HVSC/C64Music/MUSICIANS/M/Mitch_and_Dane/Dane/Hexadecimal_2SID.sid",
-    "https://hvsc.brona.dk/HVSC/C64Music/MUSICIANS/D/Da_Blondie/Back_to_the_Roots.sid",
-    "https://hvsc.brona.dk/HVSC/C64Music/MUSICIANS/0-9/20CC/van_Santen_Edwin/Spijkerhoek.sid@1",
-    "https://hvsc.brona.dk/HVSC/C64Music/MUSICIANS/L/Laxity/Stinsens_Last_Night_of_89.sid@1",
-    "https://hvsc.brona.dk/HVSC/C64Music/MUSICIANS/M/Mitch_and_Dane/Dane/Wasted_All_These_Years.sid@1",
+    "L/Lft/To_Die_For.sid",
+    "M/Mitch_and_Dane/Dane/Hexadecimal_2SID.sid",
+    "D/Da_Blondie/Back_to_the_Roots.sid",
+    "0-9/20CC/van_Santen_Edwin/Spijkerhoek.sid@1",
+    "L/Laxity/Stinsens_Last_Night_of_89.sid@1",
+    "M/Mitch_and_Dane/Dane/Wasted_All_These_Years.sid@1",
+    "H/Hannula_Antti/Eternity_2SID.sid",
 ];
 
 /// A single entry in a playlist, representing a SID tune source.
@@ -106,9 +107,13 @@ impl Playlist {
 
     /// Creates a playlist with default songs.
     fn with_defaults() -> Self {
+        const DEFAULT_HVSC_URL: &str = "https://hvsc.brona.dk/HVSC/C64Music/MUSICIANS";
         let entries = DEFAULT_PLAYLIST
             .iter()
-            .filter_map(|s| PlaylistEntry::new(s))
+            .filter_map(|s| {
+                let source = format!("{DEFAULT_HVSC_URL}/{s}");
+                PlaylistEntry::new(&source)
+            })
             .collect();
         Self { entries }
     }
