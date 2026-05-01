@@ -162,7 +162,7 @@ flowchart TB
 
 ## Limitations
 
-The emulator implements the minimum needed for CIA1-driven RSID and PSID tunes — roughly 80% of HVSC. Tunes outside this scope fail cleanly.
+The emulator covers all frame-driven and CIA-driven PSID tunes, and the CIA1-Timer-A subset of RSID files (≈80% of the RSID corpus). Tunes that need anything else are skipped with a clear error.
 
 Out of scope today:
 
