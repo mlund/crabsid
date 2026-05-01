@@ -127,15 +127,14 @@ flowchart TB
         CIA -.IRQ.-> CPU
     end
 
-    subgraph Player["Player Thread"]
+    subgraph Player["Player (Arc&lt;Mutex&gt;)"]
         PLAYER[Player]
         PLAYER --> CPU
         PLAYER --> SIDCHIP
     end
 
-    subgraph Audio["Audio Thread"]
-        AUDIO[cpal]
-        BUFFER[Audio Buffer]
+    subgraph Audio["Audio Thread (cpal callback)"]
+        AUDIO[cpal stream]
     end
 
     subgraph UI["TUI · ratatui"]
@@ -155,9 +154,8 @@ flowchart TB
     M3U --> PLAYLIST
     HVSC --> BROWSER
 
-    PLAYER <-->|Arc Mutex| APP
-    PLAYER --> BUFFER
-    BUFFER --> AUDIO
+    APP <-->|locks| PLAYER
+    AUDIO -->|fill_buffer| PLAYER
     SIDCHIP -->|envelope| SCOPE
     SIDCHIP -->|levels| VU
 ```
