@@ -128,12 +128,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .map_err(|e| format!("{e}"))?;
 
-    if args.ekv
-        && let Ok(mut p) = player.lock()
-    {
-        for i in 0..p.sid_count() {
-            p.toggle_ekv_filter(i);
-        }
+    if args.ekv && let Ok(mut p) = player.lock() {
+        p.set_ekv_filter(true);
     }
 
     // Audio callback runs on cpal's internal audio thread.

@@ -103,6 +103,9 @@ pub struct Player {
     /// Cached `SidFile::speed` so `load_song` can re-derive the drive mode without
     /// holding a `SidFile` reference.
     speed_flags: u32,
+    /// User preference for the EKV transistor-model filter. Persisted on the
+    /// player so it survives `load_sid_file`, which rebuilds the SID chips.
+    ekv_filter: bool,
 }
 
 /// Errors that can occur while initializing or running SID routines.
@@ -206,6 +209,7 @@ impl Player {
             drive_mode: DriveMode::Frame,
             is_interrupt_driven: sid_file.is_interrupt_driven(),
             speed_flags: sid_file.speed,
+            ekv_filter: false,
         };
         player.apply_drive_mode(song);
         Ok(player)
@@ -433,6 +437,8 @@ impl Player {
                 .set_sampling_parameters(self.sampling_method, self.clock_hz, self.sample_rate)
                 .unwrap();
         }
+        // configure_sids rebuilds chips with the default (standard) filter — re-apply preference.
+        self.sync_ekv_filter();
 
         let voice_count = self.chip_models.len() * 3;
         self.envelope_history = (0..voice_count)
@@ -551,15 +557,26 @@ impl Player {
         Some(new_model)
     }
 
-    /// Toggles between standard and EKV transistor model filter for the given SID.
+    /// Sets the EKV transistor-model filter preference for all SIDs.
     ///
-    /// The EKV filter provides more accurate 6581 emulation using physics-based
-    /// MOS transistor modeling. Only affects 6581 chips; 8580 always uses standard.
-    ///
-    /// Returns `Some(true)` if now using EKV, `Some(false)` if standard, `None` if out of range.
-    pub fn toggle_ekv_filter(&mut self, sid_index: usize) -> Option<bool> {
-        let chip = self.cpu.memory.sids.get_mut(sid_index)?;
-        Some(chip.sid.toggle_ekv_filter())
+    /// The preference is stored on the player and re-applied each time a new
+    /// SID file is loaded (which rebuilds the chips and would otherwise reset
+    /// the filter to the standard spline model). Only affects 6581 chips;
+    /// 8580 always uses the standard filter.
+    pub fn set_ekv_filter(&mut self, enable: bool) {
+        self.ekv_filter = enable;
+        self.sync_ekv_filter();
+    }
+
+    /// Forces every SID chip's EKV state to match `self.ekv_filter`.
+    /// The underlying library only exposes a toggle, so we read the current
+    /// state per chip and flip if it disagrees with the preference.
+    fn sync_ekv_filter(&mut self) {
+        for chip in &mut self.cpu.memory.sids {
+            if chip.sid.is_ekv_filter_enabled() != self.ekv_filter {
+                chip.sid.toggle_ekv_filter();
+            }
+        }
     }
 }
 
