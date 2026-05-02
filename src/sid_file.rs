@@ -354,12 +354,26 @@ impl SidFile {
     /// speed bitmap, code).
     #[cfg(test)]
     fn test_skeleton(magic: &str, play_address: u16, speed: u32, data: Vec<u8>) -> Self {
+        Self::test_skeleton_at(magic, 0x1000, 0x1000, play_address, speed, data)
+    }
+
+    /// `test_skeleton` variant with explicit load/init addresses for tunes that
+    /// must live in BASIC or KERNAL ROM space (e.g. Cobra at $F100).
+    #[cfg(test)]
+    fn test_skeleton_at(
+        magic: &str,
+        load_address: u16,
+        init_address: u16,
+        play_address: u16,
+        speed: u32,
+        data: Vec<u8>,
+    ) -> Self {
         Self {
             magic: magic.to_string(),
             version: 2,
             data_offset: 0x7c,
-            load_address: 0x1000,
-            init_address: 0x1000,
+            load_address,
+            init_address,
             play_address,
             songs: 1,
             start_song: 1,
@@ -373,6 +387,29 @@ impl SidFile {
             second_sid_address: None,
             third_sid_address: None,
         }
+    }
+
+    /// PSID fixture loaded into the KERNAL ROM area (init/play at $F000+).
+    /// `init` writes `$0F` to the SID master volume; `play` is a no-op RTS.
+    /// Without the PSID-driver `iomap` banking, the CPU would fetch RTS from
+    /// the KERNAL stub at $F000 instead of running the tune's volume write.
+    #[cfg(test)]
+    pub fn psid_kernal_area_fixture() -> Self {
+        use fixture_asm::*;
+        const LOAD_ADDR: u16 = 0xF000;
+        const PLAY_ADDR: u16 = LOAD_ADDR + 0x10;
+        const SID_VOLUME: u16 = 0xD418;
+
+        let mut code: Vec<u8> = Vec::new();
+        code.extend_from_slice(&lda_imm(0x0F));
+        code.extend_from_slice(&sta_abs(SID_VOLUME));
+        code.push(OP_RTS);
+
+        let play_offset = (PLAY_ADDR - LOAD_ADDR) as usize;
+        code.resize(play_offset, 0);
+        code.push(OP_RTS);
+
+        Self::test_skeleton_at("PSID", LOAD_ADDR, LOAD_ADDR, PLAY_ADDR, 0, code)
     }
 
     /// A minimal silent PSID stub used when the player has nothing to play.

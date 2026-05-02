@@ -197,6 +197,13 @@ impl C64Memory {
         self.cia_irq_routed = routed;
     }
 
+    /// Forces the `$01` banking byte. Used by the player to apply the PSID-driver
+    /// `iomap` value before init/play, so tunes whose code lives in the KERNAL
+    /// or BASIC ROM area execute from RAM instead of the banked-in stub.
+    pub const fn set_bank_config(&mut self, value: u8) {
+        self.bank_config = value;
+    }
+
     /// Returns the addresses where init wrote to out-of-scope hardware (VIC raster
     /// IRQ or CIA2 NMI), if any. Player aborts loading on a non-empty list.
     pub fn unsupported_hardware(&self) -> &[u16] {

@@ -103,6 +103,13 @@ pub struct Player {
     /// Cached `SidFile::speed` so `load_song` can re-derive the drive mode without
     /// holding a `SidFile` reference.
     speed_flags: u32,
+    /// `$01` banking byte to apply before running the init routine. Mirrors
+    /// libsidplayfp's psiddrv `iomap`: tunes loaded into KERNAL or BASIC ROM
+    /// space need those ROMs banked out so the CPU executes the loaded code.
+    init_iomap: u8,
+    /// `$01` banking byte to apply before each play call. Re-applied on every
+    /// kick so the play routine sees the right banking even if init wrote $01.
+    play_iomap: u8,
     /// User preference for the EKV transistor-model filter. Persisted on the
     /// player so it survives `load_sid_file`, which rebuilds the SID chips.
     ekv_filter: bool,
@@ -178,6 +185,9 @@ impl Player {
             sampling_method,
         );
 
+        // Apply PSID-driver banking before init so tunes whose code lives in
+        // BASIC or KERNAL ROM space (e.g. Cobra at $F100) execute from RAM.
+        cpu.memory.set_bank_config(psid_iomap(sid_file.init_address));
         run_init(&mut cpu, sid_file.init_address)?;
         check_supported_hardware(&cpu)?;
 
@@ -209,6 +219,8 @@ impl Player {
             drive_mode: DriveMode::Frame,
             is_interrupt_driven: sid_file.is_interrupt_driven(),
             speed_flags: sid_file.speed,
+            init_iomap: psid_iomap(sid_file.init_address),
+            play_iomap: psid_iomap(sid_file.play_address),
             ekv_filter: false,
         };
         player.apply_drive_mode(song);
@@ -311,6 +323,9 @@ impl Player {
 
         if self.should_kick_play() {
             reset_stack_pointer(&mut self.cpu);
+            // Re-apply banking on every kick: init may have left $01 elsewhere,
+            // and libsidplayfp's psiddrv refreshes it before each play call.
+            self.cpu.memory.set_bank_config(self.play_iomap);
             self.cpu.registers.program_counter = self.play_address;
         }
 
@@ -426,6 +441,8 @@ impl Player {
         self.sid_data = sid_file.data.clone();
         self.is_interrupt_driven = sid_file.is_interrupt_driven();
         self.speed_flags = sid_file.speed;
+        self.init_iomap = psid_iomap(sid_file.init_address);
+        self.play_iomap = psid_iomap(sid_file.play_address);
 
         self.chip_models = sid_file.preferred_chip_models(None);
         let sid_configs = build_sid_configs(sid_file, &self.chip_models);
@@ -469,6 +486,9 @@ impl Player {
         self.cpu.registers.accumulator = song_index;
         self.cpu.registers.program_counter = self.init_address;
 
+        // Apply PSID-driver banking before init so tunes loaded into KERNAL or
+        // BASIC ROM space (e.g. Cobra at $F100) execute from RAM, not the stub.
+        self.cpu.memory.set_bank_config(self.init_iomap);
         run_init(&mut self.cpu, self.init_address)?;
         check_supported_hardware(&self.cpu)?;
 
@@ -577,6 +597,20 @@ impl Player {
                 chip.sid.toggle_ekv_filter();
             }
         }
+    }
+}
+
+/// PSID-driver `$01` value to apply for an entry-point address. Mirrors
+/// libsidplayfp's `iomap`: tunes whose code lives in BASIC or KERNAL ROM space
+/// need those ROMs banked out so the CPU executes the loaded RAM instead.
+/// I/O at `$D000-$DFFF` stays mapped except when the tune itself sits there.
+const fn psid_iomap(addr: u16) -> u8 {
+    match addr {
+        0x0000..=0x9FFF => 0x37, // C64 default: BASIC + KERNAL + I/O all in
+        0xA000..=0xBFFF => 0x36, // BASIC out (tune lives in BASIC ROM space)
+        0xC000..=0xCFFF => 0x35, // BASIC + KERNAL out
+        0xD000..=0xDFFF => 0x34, // BASIC + KERNAL + I/O out (tune in I/O area)
+        0xE000..=0xFFFF => 0x35, // BASIC + KERNAL out, I/O in
     }
 }
 
@@ -867,6 +901,31 @@ mod tests {
             player.cpu.memory.ram_byte(COUNTER_ADDR) > 0,
             "play() was not called by the CIA-poll path"
         );
+    }
+
+    #[test]
+    fn psid_iomap_banks_out_kernal_for_high_init() {
+        assert_eq!(psid_iomap(0x1000), 0x37, "low memory: defaults stay");
+        assert_eq!(psid_iomap(0xA000), 0x36, "BASIC ROM area: BASIC out");
+        assert_eq!(psid_iomap(0xC000), 0x35, "between ROMs: both ROMs out");
+        assert_eq!(psid_iomap(0xD400), 0x34, "I/O area: I/O out");
+        assert_eq!(psid_iomap(0xF900), 0x35, "KERNAL ROM area: KERNAL out, I/O in");
+    }
+
+    /// Regression for tunes loaded into the KERNAL ROM area (e.g. Daglish's
+    /// Cobra at $F100). The KERNAL stub returns RTS for any address it covers,
+    /// so without `iomap` banking the init routine would return immediately
+    /// without writing any SID register.
+    #[test]
+    fn psid_kernal_area_fixture_runs_init_from_ram() {
+        let sid = SidFile::psid_kernal_area_fixture();
+        let player =
+            Player::new(&sid, 1, 44_100, None, SamplingMethod::Fast).expect("player init");
+
+        // Init wrote $0F to $D418; if KERNAL was still banked in, init would
+        // have hit the stub's RTS at $F000 and the SID would still read 0.
+        let state = first_sid!(player).read_state();
+        assert_eq!(state.sid_register[0x18], 0x0F, "init didn't reach SID volume");
     }
 
     /// CIA Timer A drives the IRQ; the handler increments `$0400`. After a single
